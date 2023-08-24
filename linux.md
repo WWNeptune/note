@@ -744,7 +744,7 @@ if(S_ISREG(sb.st_mode)){
 
 4.函数调用结束后充当函数返回值
 
-##### link函数
+##### link/unlink函数
 
 目录项游离于inode之外，将文件名单独存储是为了实现文件共享。Linux允许多个目录项共享一个inode，即共享盘块(data)。不同文件名，在内核眼里是同一个文件。link函数，可以为已经存在的文件创建目录项(硬链接)。
 
@@ -1309,6 +1309,8 @@ if (ret==-1){printf("error");}
 
 已读取的数据在管道里消失，不能再读
 
+fifo支持多读端多写端
+
 #### 存储映射
 
 把磁盘文件映射到内存 。当从缓冲区中取数据，就相当于读文件中的相应字节。于此类似，将数据存入缓冲区，则相应的字节就自动写入文件。这样，就可在不适用read和write函数的情况下，使用地址（指针）完成I/O操作。
@@ -1366,14 +1368,296 @@ int main(int argc,char *argv[]){
 
 ##### munmap函数
 
+类似free，删除特定地址区域的对象映射。
+
 同malloc函数申请内存空间类似的，mmap建立的映射区在使用结束后也应调用类似free的函数来释放。
 
 **int munmap(void *addr, size_t length);** 				成功：0； 失败：-1
 
 ##### 注意事项
 
-1.当用于创建映射区的文件的大小为0，然后mmap指定非0大小创建映射区，发生总线错误；指定0大小创建映射区，参数无效
+1.当用于创建映射区的文件的大小为0，然后mmap指定非0大小创建映射区，发生总线错误（用于映射的文件必须要有实际大小）；指定0大小创建映射区，参数无效
 
 2.当用于创建映射区的文件属性为只读，映射区属性为读写，发生参数错误
 
-3.
+3.mmap建立映射区会读一次文件，需要READ权限
+
+4.文件描述符fd在mmap创建映射区完成后就可关闭，后续靠地址访问
+
+5.偏移量offset必须是4096整数倍（MMU最小单位是4K）
+
+6.对申请的内存不能越界访问
+
+7.munmap用于释放的地址，必须是mmap申请返回的地址（若执行p++过则不是原来的地址）
+
+8.若映射区权限为私有“MAP_PRIVATE”，则修改只在内存有效，不会修改磁盘
+
+###### MMAP函数的安全调用方式
+
+1.fd=open("文件名",O_RDWR)
+
+2.mmap(NULL,有效文件大小，PROT_READ|PROT_WRITE,MAP_SHARED,fd,0)
+
+###### 父子进程使用mmap进程间通信
+
+父进程先创建映射区	open(O_RDWR) 
+
+指定共享权限	mmap(MAP_SHARED)
+
+fork()创建子进程
+
+###### 无血源性进程mmap通信
+
+写进程先打开文件，权限共享，再用mmap创建映射区并写入
+
+读进程打开同名文件，创建映射区并读取
+
+mmap：数据可反复读取
+
+fifo：数据仅能读取一次
+
+##### 匿名映射
+
+通常为了建立映射区要open一个temp文件，创建好了再unlink、close掉，比较麻烦。 可以直接使用匿名映射来代替。
+
+匿名映射只能用于血缘关系进程通信
+
+使用MAP_ANONYMOUS (或MAP_ANON)， 如: 
+
+​     **int *p = mmap(NULL, 4, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS, -1, 0);**
+
+ "4"为随意举例，该位置表大小，可依实际需要填写。
+
+
+
+值得注意的是：MAP_ANON和 /dev/zero 都不能应用于非血缘关系进程间通信。只能用于亲子进程间
+
+/dev/null（空设备文件或黑洞文件）是一个特殊的设备文件，所有写入其中的数据，都会被丢弃的无影无踪，/dev/null通常被用于丢弃不需要的数据输出，或作为用于输入流的空文件。这些操作通常由重定向完成。
+
+/dev/zero是一个特殊的字符设备文件，当我们使用或读取它的时候，它会提供无限连续不断的空的数据流（特殊的数据格式流）。
+
+### 信号
+
+简单，不能携带大量信息，满足条件才发送
+
+A给B发送信号，B收到信号之前执行自己的代码，收到信号后，不管执行到程序的什么位置，都要暂停运行，去处理信号，处理完毕再继续执行。与硬件中断类似——异步模式。但信号是软件层面上实现的中断，早期常被称为“软中断”。
+
+**每个进程收到的所有信号，都是由内核负责发送的，内核处理。**
+
+**产生信号**: 
+
+1. 按键产生，如：Ctrl+c、Ctrl+z、Ctrl+\
+2. 系统调用产生，如：kill、raise、abort
+3. 软件条件产生，如：定时器alarm
+4. 硬件异常产生，如：非法访问内存(段错误)、除0(浮点数例外)、内存对齐出错(总线错误)
+5. 命令产生，如：kill命令
+
+**递达**：递送并且到达进程。
+
+**未决**：产生和递达之间的状态。主要由于阻塞(屏蔽)导致该状态。
+
+**信号的处理方式:** 
+
+1. 执行默认动作 
+2. 忽略(丢弃) 
+3. 捕捉(调用户处理函数)
+
+进程控制块PCB还包含了信号相关的信息，主要指阻塞信号集和未决信号集。一般以01位表示是否触发
+
+**阻塞信号集**(**信号屏蔽字**)： 将某些信号加入集合，对他们设置屏蔽，当屏蔽x信号后，再收到该信号，该信号的处理将推后(解除屏蔽后)
+
+**未决信号集**: 
+
+1. 信号产生，未决信号集中描述该信号的位立刻翻转为1，表信号处于未决状态。当信号被处理对应位翻转回为0。这一时刻往往非常短暂。 
+2. 信号产生后由于某些原因(主要是阻塞)不能抵达。这类信号的集合称之为未决信号集。在屏蔽解除前，信号一直处于未决状态。
+
+**信号4要素：**
+
+1. 编号 2. 名称 3. 事件 4. 默认处理动作 
+
+### Linux常规信号一览表
+
+1) SIGHUP: 当用户退出shell时，由该shell启动的所有进程将收到这个信号，默认动作为终止进程
+
+2) SIGINT：当用户按下了<Ctrl+C>组合键时，用户终端向正在运行中的由该终端启动的程序发出此信号。默认动作为终止进程。
+
+3) SIGQUIT：当用户按下<ctrl+\>组合键时产生该信号，用户终端向正在运行中的由该终端启动的程序发出些信号。默认动作为终止进程。
+
+4) SIGILL：CPU检测到某进程执行了非法指令。默认动作为终止进程并产生core文件
+5) SIGTRAP：该信号由断点指令或其他 trap指令产生。默认动作为终止里程 并产生core文件。
+6) SIGABRT: 调用abort函数时产生该信号。默认动作为终止进程并产生core文件。
+7) SIGBUS：非法访问内存地址，包括内存对齐出错，默认动作为终止进程并产生core文件。
+8) SIGFPE：在发生致命的运算错误时发出。不仅包括浮点运算错误，还包括溢出及除数为0等所有的算法错误。默认动作为终止进程并产生core文件。
+9) **SIGKILL**：无条件终止进程。本信号不能被忽略，处理和阻塞。默认动作为终止进程。它向系统管理员提供了可以杀死任何进程的方法。
+10) SIGUSE1：用户定义 的信号。即程序员可以在程序中定义并使用该信号。默认动作为终止进程。
+11) SIGSEGV：指示进程进行了无效内存访问。默认动作为终止进程并产生core文件。
+12) SIGUSR2：另外一个用户自定义信号，程序员可以在程序中定义并使用该信号。默认动作为终止进程。
+13) SIGPIPE：Broken pipe向一个没有读端的管道写数据。默认动作为终止进程。
+14) SIGALRM: 定时器超时，超时的时间 由系统调用alarm设置。默认动作为终止进程。
+15) SIGTERM：程序结束信号，与SIGKILL不同的是，该信号可以被阻塞和终止。通常用来要示程序正常退出。执行shell命令Kill时，缺省产生这个信号。默认动作为终止进程。
+16) SIGSTKFLT：Linux早期版本出现的信号，现仍保留向后兼容。默认动作为终止进程。
+17) SIGCHLD：子进程状态发生变化时，父进程会收到这个信号。默认动作为**忽略**这个信号。
+18) SIGCONT：如果进程已停止，则使其继续运行。默认动作为继续/忽略。
+19) **SIGSTOP**：停止进程的执行。信号不能被忽略，处理和阻塞。默认动作为暂停进程。
+20) SIGTSTP：停止终端交互进程的运行。按下<ctrl+z>组合键时发出这个信号。默认动作为暂停进程。
+21) SIGTTIN：后台进程读终端控制台。默认动作为暂停进程。
+22) SIGTTOU: 该信号类似于SIGTTIN，在后台进程要向终端输出数据时发生。默认动作为暂停进程。
+23) SIGURG：套接字上有紧急数据时，向当前正在运行的进程发出些信号，报告有紧急数据到达。如网络带外数据到达，默认动作为忽略该信号。
+24) SIGXCPU：进程执行时间超过了分配给该进程的CPU时间 ，系统产生该信号并发送给该进程。默认动作为终止进程。
+25) SIGXFSZ：超过文件的最大长度设置。默认动作为终止进程。
+26) SIGVTALRM：虚拟时钟超时时产生该信号。类似于SIGALRM，但是该信号只计算该进程占用CPU的使用时间。默认动作为终止进程。
+27) SGIPROF：类似于SIGVTALRM，它不公包括该进程占用CPU时间还包括执行系统调用时间。默认动作为终止进程。
+28) SIGWINCH：窗口变化大小时发出。默认动作为忽略该信号。
+29) SIGIO：此信号向进程指示发出了一个异步IO事件。默认动作为忽略。
+30) SIGPWR：关机。默认动作为终止进程。
+31) SIGSYS：无效的系统调用。默认动作为终止进程并产生core文件。
+32) SIGRTMIN ～ (64) SIGRTMAX：LINUX的实时信号，它们没有固定的含义（可以由用户自定义）。所有的实时信号的默认动作都为终止进程。
+
+##### kill信号和函数
+
+**int kill(pid_t pid,int sig)**
+
+用于向任何进程组或进程发送信号，本身与kill命令不同
+
+ 成功：0；失败：-1
+
+pid > 0: 发送信号给指定的进程。
+
+pid = 0: 发送信号给 "与调用kill函数进程属于同一进程组的所有进程"。
+
+pid < 0: 取|pid|发给对应进程组。
+
+pid = -1：发送给进程有权限发送的系统中所有进程。
+
+sig：不推荐直接使用数字，应使用宏名，因为不同操作系统信号编号可能不同，但名称一致
+
+```c
+kill(getppid(),SIGKILL);//SIGKILL是发送的信号
+```
+
+使用kill命令时，在id号前加-号可以杀死进程组
+
+```shell
+kill -9 12489//杀死12489进程
+kill -9 -12489//杀死1249进程组
+```
+
+##### alarm函数
+
+设置定时器(闹钟)。在指定seconds后，内核会给当前进程发送14）SIGALRM信号。进程收到该信号，默认动作终止。
+
+**每个进程都有且只有唯一个定时器。**
+
+**unsigned int alarm(unsigned int seconds)**; 		返回0或剩余的秒数，无失败。
+
+alarm(0)则为取消定时，返回剩余秒数
+
+使用time命令可查看程序运行时间
+
+##### setitimer函数
+
+设置定时器(闹钟)。 可代替alarm函数。**精度微秒us**，可以实现周期定时。
+
+**int setitimer(int which, const struct itimerval *new_value, struct itimerval *old_value)**;   成功：0；失败：-1，设置errno
+
+参数：which：指定定时方式
+
+​		  ① 自然定时：ITIMER_REAL → 14）SIGLARM                       以系统真实的时间来计算，它送出SIGALRM信号
+
+​          ② 虚拟空间计时(用户空间)：ITIMER_VIRTUAL → 26）SIGVTALRM   以该进程在用户态下花费的时间来计算，它送出SIGVTALRM信号。
+
+​          ③ 运行时计时(用户+内核)：ITIMER_PROF → 27）SIGPROF       以该进程在用户态下和内核态下所费的时间来计算。它送出SIGPROF信号
+
+与之对应的还有getitimer函数
+
+itimerval 类型：
+
+```c
+struct itimerval {
+    struct timeval it_interval; /* next value */
+    struct timeval it_value;    /* current value */
+};
+//itimeval又是由两个timeval结构体组成，timeval包括tv_sec和tv_usec两部分。当中tv_se为秒。tv_usec为微秒
+struct timeval {
+    time_t      tv_sec;         /* seconds */
+    suseconds_t tv_usec;        /* microseconds */
+};
+```
+
+**settimer工作机制是，先对it_value倒计时，当it_value为零时触发信号。然后重置为it_interval。继续对it_value倒计时。一直这样循环下去。**
+
+old_value參数，通常使用不上设置为NULL，它是用来存储上一次setitimer调用时设置的new_value值
+
+```c
+void myfunc(int signo)
+{
+    printf("hello world\n");
+}
+int main(void)
+{
+    struct itimerval it,oldit;
+    signal(SIGALRM,myfunc);
+    it.it_value.tv_sec=2;
+    it.it_value.tv_usec=0;
+    it.it_interval.tv_sec=5;
+    it.it_interval.tv_usec=0;
+    if(setitimer(ITIMER_REAL,&it,&oldit)==-1){
+        perror("setitimer error");
+        return -1;
+    }
+    while(-1);
+    return 0;
+}
+```
+
+### 信号集操作函数
+
+内核通过读取**未决信号集**来判断信号是否应被处理。信号屏蔽字mask可以影响未决信号集。而我们可以在应用程序中自定义阻塞信号集set来改变mask
+
+可通过改变阻塞信号集来改变未决信号集，阻塞和未决信号集初始都是0
+
+#### 信号集设定
+
+sigset_t set;           // typedef unsigned long sigset_t; 自定义信号集
+
+int sigemptyset(sigset_t *set);           信号集清0                成功：0；失败：-1
+
+int sigfillset(sigset_t *set);                  信号集置1               成功：0；失败：-1
+
+int sigaddset(sigset_t *set, int signum);      将某个信号加入信号集         成功：0；失败：-1
+
+int sigdelset(sigset_t *set, int signum);       将某个信号清出信号集        成功：0；失败：-1
+
+int sigismember(const sigset_t *set, int signum);  判断某个信号是否在信号集中    返回值：在集合：1；不在：0；出错：-1
+
+ sigset_t类型的本质是位图。但不应该直接使用位操作，而应该使用上述函数，保证跨系统操作有效
+
+#### sigprocmask函数
+
+用来屏蔽信号、解除屏蔽也使用该函数。其本质，读取或修改进程的信号屏蔽字(PCB中)
+
+  **严格注意，屏蔽信号：只是将信号处理延后执行(延至解除屏蔽)**；而忽略表示将信号丢处理。
+
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);   成功：0；失败：-1，设置errno
+
+参数：
+
+ set：传入参数，是一个位图，set中哪位置1，就表示当前进程屏蔽哪个信号。
+
+ oldset：传出参数，保存旧的信号屏蔽集。
+
+ how参数取值：   假设当前的信号屏蔽字为mask
+
+1. SIG_BLOCK: 当how设置为此值，set表示需要屏蔽的信号。相当于 mask = mask|set
+2. SIG_UNBLOCK: 当how设置为此，set表示需要解除屏蔽的信号。相当于 mask = mask & ~set
+3. SIG_SETMASK: 当how设置为此，set表示用于替代原始屏蔽及的新屏蔽集。相当于 mask = set若，调用sigprocmask解除了对当前若干个信号的阻塞，则在sigprocmask返回前，至少将其中一个信号递达。
+
+![信号屏蔽字](D:\project\git-note\note\图\信号屏蔽字.jpg)
+
+set是用户自定义的，mask是PCB内置的
+
+#### sigpending函数
+
+读取当前进程的**未决**信号集
+
+int sigpending(sigset_t *set); set传出参数。  返回值：成功：0；失败：-1，设置errno
