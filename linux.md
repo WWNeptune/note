@@ -1661,3 +1661,5 @@ set是用户自定义的，mask是PCB内置的
 读取当前进程的**未决**信号集
 
 int sigpending(sigset_t *set); set传出参数。  返回值：成功：0；失败：-1，设置errno
+
+ 
