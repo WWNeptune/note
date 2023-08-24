@@ -551,7 +551,7 @@ read和write函数无用户级缓冲，每次执行都会访问一次磁盘IO，
 
 在用户和内核层(kernel)之间有一步预读入缓输出，系统会根据自身判断进行操作
 
-![预读入缓输出](D:\project\note\图\预读入缓输出.jpg)
+![预读入缓输出](..\note\图\预读入缓输出.jpg)
 
 阻塞/非阻塞：文件属性，当读设备文件或网络文件会出现，读常规文件不会出现该情况
 
@@ -585,7 +585,7 @@ int main(void)
 
 本质是一个键值对0、1、2...都分别对应具体地址。但键值对使用的特性是自动映射，我们只操作键不直接使用值。
 
-![文件描述符](D:\project\note\图\文件描述符.png)
+![文件描述符](..\note\图\文件描述符.png)
 
 文件描述符默认用表中未占用的最小值
 
@@ -702,7 +702,7 @@ inode本质为结构体，存储文件的属性信息。如：权限、类型、
 
 dentry为目录项，本质也为结构体，重要成员变量有两个{文件名，inode,...}，文件内容保存在磁盘盘块中
 
-![inode](D:\project\note\图\inode.jpg)
+![inode](..\note\图\inode.jpg)
 
 ##### stat函数
 
@@ -1652,7 +1652,7 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);   成功：0；
 2. SIG_UNBLOCK: 当how设置为此，set表示需要解除屏蔽的信号。相当于 mask = mask & ~set
 3. SIG_SETMASK: 当how设置为此，set表示用于替代原始屏蔽及的新屏蔽集。相当于 mask = set若，调用sigprocmask解除了对当前若干个信号的阻塞，则在sigprocmask返回前，至少将其中一个信号递达。
 
-![信号屏蔽字](D:\project\git-note\note\图\信号屏蔽字.jpg)
+![信号屏蔽字](..\note\图\信号屏蔽字.jpg)
 
 set是用户自定义的，mask是PCB内置的
 
@@ -1662,4 +1662,371 @@ set是用户自定义的，mask是PCB内置的
 
 int sigpending(sigset_t *set); set传出参数。  返回值：成功：0；失败：-1，设置errno
 
- 
+ ```c
+ #include<stdio.h>
+ #include<stdlib.h>
+ #include<string.h>
+ #include<signal.h>
+ #include<unistd.h>
+ #include<errno.h>
+ #include<pthread.h>
+ void sys_err(const char *str)
+ {
+     perror(1);
+     exit(1);
+ }
+ void print_set(sigset_t *set)
+ {
+     int i;
+     for(i=1;i<32;i++){
+         if(sigismember(&set,i))
+             putchar('1');
+         else
+             putchar('0');
+     }
+     printf("\n");
+ }
+ int main(int argc,char *argv[])
+ {
+     sigset_t set,oldset,pedset;
+     int ret=0;
+     sigemptyset(&set);
+     sigaddset(&set,SIGINT);//阻塞信号ctrl+c
+     ret=sigprocmask(SIG_BLOCK,&set,&oldset);
+     if(ret==-1)
+         sys_err("sigprocmask error");
+     while(1){
+         ret=sigpending(&pedset);
+     	if(ret==-1)
+         	sys_err("sigpending error");
+     	print_set(&pedset);
+         sleep(1);
+     }    
+     return 0;
+ }
+ //运行后ctrl+c操作被阻塞
+ ```
+
+### 信号捕捉
+
+#### signal函数
+
+**注册**一个信号捕捉函数
+
+```c
+void sig_catch(int signo){
+    printf("catch sig: %d\n",signo);
+    return;
+}
+signal(SIGINT,sig_catch);//只需注册，当ctrl+c触发时自动执行
+while(1);
+```
+
+#### sigaction函数
+
+修改信号处理动作（通常在Linux用其来注册一个信号的捕捉函数）
+
+**int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);** 成功：0；失败：-1，设置errno
+
+参数：
+
+​		  act：传入参数，新的处理方式。
+
+​          oldact：传出参数，旧的处理方式。
+
+###### sigaction结构体
+
+```c
+struct sigaction {
+   void   (*sa_handler)(int);
+   void   (*sa_sigaction)(int, siginfo_t *, void *);
+   sigset_t  sa_mask; 
+   int    sa_flags; 
+   void   (*sa_restorer)(void);
+  };
+```
+
+
+
+​     sa_restorer：该元素是过时的，不应该使用，POSIX.1标准将不指定该元素。(弃用)
+
+​     sa_sigaction：当sa_flags被指定为SA_SIGINFO标志时，使用该信号处理程序。(很少使用)
+
+① sa_handler：指定信号捕捉后的处理函数名(即注册函数)。也可赋值为SIG_IGN表忽略 或 SIG_DFL表执行默认动作
+
+② sa_mask: 调用信号处理函数时，所要屏蔽的信号集合(信号屏蔽字)。注意：仅在处理函数被调用期间屏蔽生效，是临时性设置。
+
+③ sa_flags：通常设置为0，表使用默认属性。
+
+```c
+void sig_catch(int signo)//回调函数
+{
+    printf("catch sig: %d\n",signo);//signo为SIGINT
+    return;
+}
+int main(int argc,char *argv[]){
+    struct sigaction act,oldact;
+    act.sa_handler=sig_catch;//设置回调函数
+    sigemptyset(&(act.sa_mask));//清空屏蔽字，当sig_catch工作有效
+    act.sa_flags=0;
+    
+    int ret=sigaction(SIGINT,&act,&oldact);//注册信号捕捉函数
+    if(ret==-1)
+        sys_err("sigaction error");
+    while(1);
+    return 0;
+}
+```
+
+#### 信号捕捉特性
+
+1. 进程正常运行时，默认PCB中有一个信号屏蔽字，假定为☆，它决定了进程自动屏蔽哪些信号。当注册了某个信号捕捉函数，捕捉到该信号以后，要调用该函数。而该函数有可能执行很长时间，在这期间所屏蔽的信号不由☆来指定。而是用sa_mask来指定。调用完信号处理函数，再恢复为☆。
+2. XXX信号捕捉函数执行期间，XXX信号自动被屏蔽。
+3. 阻塞的常规信号不支持排队，产生多次只记录一次。（后32个实时信号支持排队
+
+#### 内核实现信号捕捉过程
+
+![信号捕捉内核](..\note\图\信号捕捉内核.jpg)
+
+#### SIGCHLD信号
+
+产生条件：
+
+子进程终止时
+
+子进程接收到SIGSTOP信号停止时
+
+子进程处在停止态，接受到SIGCONT后唤醒时
+
+```c
+//借助信号回收子进程
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <signal.h>
+void sys_err(char *str)
+{
+    perror(str);
+    exit(1);
+}
+void catch_child(int signo)
+{
+    pid_t wpid;
+    wpid=wait(NULL);
+    
+    if(wpid==-1)
+        sys_err("wait error");
+    printf("catch child id %d\n",wpid);
+    return ;
+}
+int main(int argc,char*argv[])
+{
+    pid_t pid;int i;
+    for (i = 0; i < 10; i++) {
+    if ((pid = fork()) == 0)
+        break;
+    }
+	if(10==i){
+        struct sigaction act;
+        act.sa_handler=catch_child;//设置回调函数
+        sigemptyset(&act.sa_mask);//设置捕捉函数执行期间屏蔽字
+        act.sa_flags=0;
+        sigaction(SIGCHLD,&act,NULL);//注册信号捕捉函数
+        printf("i'm parent,pid=%d\n",getpid());
+        while(1); 
+    }else{
+        printf("i'm child,pid=%d\n",getpid());
+    }
+    return 0;
+}
+//由于信号回调函数执行期间不处理新信号，此方法会产生僵尸进程
+```
+
+```c
+void catch_child(int signo)
+{
+    pid_t wpid;int status;
+    while((wpid=waitpid(-1，&status,0))!=-1)//使用循环阻塞回收所有结束子进程	用wait会阻塞，waitpid非阻塞情况下会直接返回-1，不会阻塞
+    {
+        if(WIFEXITED(status))//获取退出状态
+	        printf("catch child id %d,ret=%d\n",wpid,WEXITSTATUS(status));
+    }
+    return ;
+}
+```
+
+如果父进程完成注册之前子进程全部结束，则会出现不触发信号的情况
+
+```c
+sigset_t set;
+sigemptyset(&set);
+sigaddset(&set,SIGCHLD);
+sigprocmask(SIG_BLOCK,&set,NULL);//阻塞
+
+/*pid_t pid;int i;
+    for (i = 0; i < 10; i++) {
+    if ((pid = fork()) == 0)
+        break;
+    }
+	if(10==i){
+        struct sigaction act;
+        act.sa_handler=catch_child;//设置回调函数
+        sigemptyset(&act.sa_mask);//设置捕捉函数执行期间屏蔽字
+        act.sa_flags=0;
+        sigaction(SIGCHLD,&act,NULL);//注册信号捕捉函数*/
+
+		sigprocmask(SIG_UNBLOCK,&set,NULL);//解除阻塞
+        
+        /*printf("i'm parent,pid=%d\n",getpid());
+        while(1);*/
+//在原main函数中添加,防止父进程注册成功前发生子进程结束而收不到信号的情况
+```
+
+
+
+#### 中断系统调用
+
+系统调用可分为两类：慢速系统调用和其他系统调用。
+
+1. 慢速系统调用：可能会使进程永远阻塞的一类。如果在阻塞期间收到一个信号，该系统调用就被中断,不再继续执行(早期)；也可以设定系统调用是否重启。如，read、write、pause、wait...
+2. 其他系统调用：getpid、getppid、fork...
+
+慢速系统调用被中断的相关行为，实际上就是pause的行为： 如，read
+
+​          ① 想中断pause，信号不能被屏蔽。
+
+​          ② 信号的处理方式必须是捕捉 (默认、忽略都不可以)
+
+​          ③ 中断后返回-1， 设置errno为EINTR(表“被信号中断”)
+
+可修改sa_flags参数来设置被信号中断后系统调用是否重启。SA_INTERRURT不重启。 SA_RESTART重启
+
+### 进程与线程
+
+#### 进程组和会话
+
+进程组，也称之为作业，代表一个或多个进程的集合。每个进程都属于一个进程组。
+
+当父进程，创建子进程的时候，默认子进程与父进程属于同一进程组。进程组ID==第一个进程ID(组长进程)。可以使用kill -SIGKILL -进程组ID(负的)来将整个进程组内的进程全部杀死。
+
+组长进程可以创建一个进程组，创建该进程组中的进程，然后终止。只要进程组中有一个进程存在，进程组就存在，与组长进程是否终止无关。
+
+进程组生存期：进程组创建到最后一个进程离开(终止或转移到另一个进程组)。
+
+一个进程可以为自己或子进程设置进程组ID
+
+会话是多个进程组的集合
+
+##### 创建会话
+
+创建一个会话需要注意以下6点注意事项：
+
+1. 调用进程不能是进程组组长，该进程变成新会话首进程(session header)
+2. 该进程成为一个新进程组的组长进程。
+3. 需有root权限 (ubuntu不需要)
+4. 新会话丢弃原有的控制终端，该会话没有控制终端
+5. 该调用进程是组长进程，则出错返回
+6. 建立新会话时，先调用fork, 父进程终止，子进程调用setsid()
+
+##### getsid函数
+
+获取进程所属的会话ID
+
+​	**pid_t getsid(pid_t pid);** 成功：返回调用进程的会话ID；失败：-1，设置errno
+
+​	pid为0表示察看当前进程session ID
+
+组长进程不能成为新会话首进程，新会话首进程必定会成为组长进程。
+类似：getpgid() 获取组id
+
+##### setsid函数
+
+创建一个会话，并以自己的ID设置进程组ID，同时也是新会话的ID。
+
+​     **pid_t setsid(void);** 成功：返回调用进程的会话ID；失败：-1，设置errno
+
+​     调用了setsid函数的进程，既是新的会长，也是新的组长。
+
+#### 守护进程
+
+Daemon(精灵)进程，是Linux中的后台服务进程，通常**独立于控制终端**并且周期性地执行某种任务或等待处理某些发生的事件。一般采用以d结尾的名字。
+
+创建守护进程，最关键的一步是调用setsid函数创建一个新的Session，并成为Session Leader。
+
+##### 创建守护进程模型
+
+1. 创建子进程，父进程退出
+
+​		所有工作在子进程中进行，形式上脱离了控制终端
+
+2. 在子进程中创建新会话
+
+　　setsid()函数
+
+　　使子进程完全独立出来，脱离控制
+
+3. 根据需要改变当前目录，如根目录
+
+　　 chdir()函数
+
+　　 防止占用可卸载的文件系统，也可以换成其它路径
+
+4. 重设文件权限掩码
+
+　　  umask()函数
+
+　　  防止继承的文件创建屏蔽字拒绝某些权限， 增加守护进程灵活性
+
+5. 关闭文件描述符
+
+　　   继承的打开文件不会用到，浪费系统资源，无法卸载
+
+6. 开始执行守护进程核心工作守护进程退出处理程序模型                                                                                                                 
+
+```c
+void sys_err(const char *str)
+{
+    perror(str);
+    exit(1);
+}
+int main(int argc,char *argv[])
+{
+    pid_t pid;
+    int ret;
+    pid=fork();
+    if(pid>0)	//父进程终止
+        exit(0);
+    pid=setsid();//创建新会话
+    if(pid==-1)
+        sys_err("setsid error");
+    //ret=chdir("/home/yufan");//改变工作目录，根据实际修改
+    if(ret==-1)
+        sys_err("chdir err");
+    umask(0022);	//改变文件访问权限掩码
+    close(STDIN_FILENO);//关闭文件描述符 0
+    fd=open("/dev/null",O_RDWR);//fd-->0
+    if(fd==-1)
+        sys_err("open error");
+    dup2(fd,STDOUT_FILENO);//重定向stdout和stderr
+    dup2(fd,STDERR_FILENO);
+    
+    return 0;
+}
+```
+
+#### 线程
+
+LWP：light weight process 轻量级的进程，本质仍是进程(在Linux环境下)
+
+进程：独立地址空间，拥有PCB 
+
+线程：有独立的PCB，但没有独立的地址空间(共享)
+
+区别：在于是否共享地址空间。     独居(进程)；合租(线程)。
+
+Linux下：    线程：最小的执行单位
+
+​                     进程：最小分配资源单位，可看成是只有一个线程的进程。
+
