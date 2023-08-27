@@ -2030,3 +2030,136 @@ Linux下：    线程：最小的执行单位
 
 ​                     进程：最小分配资源单位，可看成是只有一个线程的进程。
 
+当线程创建后，原始的进程也变为线程之一
+
+三级映射：进程PCB --> 页目录(可看成数组，首地址位于PCB中) --> 页表 --> 物理页面 --> 内存单元
+
+
+
+1. 轻量级进程(light-weight process)，也有PCB，创建线程使用的底层函数和进程一样，都是clone
+2. 从内核里看进程和线程是一样的，都有各自不同的PCB，但是PCB中指向内存资源的三级页表是相同的
+3. 进程可以蜕变成线程
+4. 线程可看做寄存器和栈的集合
+5. 在linux下，线程最是小的执行单位；进程是最小的分配资源单位
+
+##### 线程共享资源
+
+​     1.文件描述符表 
+
+​     2.每种信号的处理方式 ，但mask不共享（不建议线程和信号混用）
+
+​     3.当前工作目录
+
+​     4.用户ID和组ID
+
+​     5.内存地址空间 (.text/.data/.bss/heap/共享库)
+
+##### 线程非共享资源
+
+​     1.线程id
+
+​     2.处理器现场和栈指针(内核栈)
+
+​     3.独立的栈空间(用户空间栈)
+
+​     4.errno变量
+
+​     5.信号屏蔽字mask
+
+​     6.调度优先级 
+
+##### 线程优、缺点
+
+​     优点：   1. 提高程序并发性    2. 开销小    3. 数据通信、共享数据方便
+
+​     缺点：   1. 库函数，不稳定    2. 调试、编写困难、gdb不支持     3. 对信号支持不好
+
+​     优点相对突出，缺点均不是硬伤。Linux下由于实现方法导致进程、线程差别不是很大。
+
+##### 创建线程
+
+###### pthread_self函数
+获取线程ID。其作用对应进程中 getpid() 函数。
+**pthread_t pthread_self(void);**	返回值：成功：0；	失败：无
+
+pthread_t是无符号型变量
+
+###### pthread_create函数
+
+创建一个新线程。对应进程中fork() 函数。
+
+**int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg);**
+
+返回值：成功：0；    失败：错误号     -----Linux环境下，所有线程特点，失败均直接返回错误号
+
+参数1：传出参数，保存系统为我们分配好的线程ID
+
+参数2：通常传NULL，表示使用线程默认属性。若想使用具体属性也可以修改该参数。
+
+参数3：函数指针，指向线程主函数(线程体)，该函数运行结束，则线程结束。
+
+参数4：**线程主函数**执行期间所使用的参数。
+
+```c
+#include<unistd.h>
+#include<errno.h>
+#include<pthread.h>
+void sys_err(const char *str)
+{
+    perror(str);
+    exit(1);
+}
+void *tfn(void *arg)
+{
+    printf("thread:pid =%d,tid=%lu\n",getpid(),pthread_self());
+    return NULL;
+}
+int main(int argc,char *argv[]){
+    pthread_t tid;
+    int ret=pthread_create(&tid,NULL,tfn,NULL);
+    if(ret!=0){
+        perror("pthread_create error");
+    }
+    printf("main:pid=%d,tid =%lu\n",getpid(),pthread_self());
+    sleep(1);//防止线程执行前主程序提前结束
+    return 0;
+}
+```
+
+如果需要向函数传参，则用(void*)类型进行传递
+
+```int ret=pthread_create(&tid,NULL,tfn,(void*)i);```
+
+之后在函数内 按需进行类型转换，如```int i=(int *)arg```
+
+注意：这里不用引用传递的原因是子线程执行期间，主线程依然在运行，此时若用引用取值则会取到已在主线程里变化过的值
+
+###### pthread_exit函数
+
+将单个线程退出
+
+**void pthread_exit(void *retval);**   参数：retval表示线程退出状态，通常传NULL
+
+###### pthread_join函数
+
+阻塞等待线程退出，获取线程退出状态       其作用，对应进程中 waitpid() 函数。
+
+```int pthread_join(pthread_t thread, void **retval);```成功：0；失败：错误号
+
+参数：thread：线程ID （【注意】：不是指针）；retval：存储线程结束状态。
+
+这里子线程返回值要是void*类型
+
+```c
+void *tfn(void *arg)
+{
+    return (void*)70;
+}
+int main(){
+    int *retval;
+    //此处创建子线程部分省略,tid是线程号
+    int ret=pthread_join(tid,(void **)&retval);
+    printf("thread return:%d\n",(void *)retval);
+}
+```
+
