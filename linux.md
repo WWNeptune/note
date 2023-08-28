@@ -2076,7 +2076,7 @@ Linux下：    线程：最小的执行单位
 
 ​     优点相对突出，缺点均不是硬伤。Linux下由于实现方法导致进程、线程差别不是很大。
 
-##### 创建线程
+##### 创建线程相关源语
 
 ###### pthread_self函数
 获取线程ID。其作用对应进程中 getpid() 函数。
@@ -2146,7 +2146,7 @@ int main(int argc,char *argv[]){
 
 ```int pthread_join(pthread_t thread, void **retval);```成功：0；失败：错误号
 
-参数：thread：线程ID （【注意】：不是指针）；retval：存储线程结束状态。
+参数：thread：线程ID ；retval：存储线程结束状态。（【注意】：不是指针）
 
 这里子线程返回值要是void*类型
 
@@ -2163,3 +2163,228 @@ int main(){
 }
 ```
 
+###### pthread_cancel函数
+
+杀死(取消)线程             其作用，对应进程中 kill() 函数。
+
+```int pthread_cancel(pthread_t thread);```  成功：0；失败：错误号
+
+【注意】：线程的取消并不是实时的，而有一定的延时。需要等待线程到达某个取消点(检查点)。
+
+被杀死的线程必须有机会进入内核态，cancel类似信号，若是线程没机会进入内核，那就杀不死（比如空循环而没有执行内容）
+
+```c
+void *tfn3(void *arg)
+{
+    while(1){
+        //pthread_testcancel();//解决方法是让线程有执行内容
+    }
+}
+pthread_create(&tid,NULL,tfn3,NULL);//此时该语句无法杀死线程，因为线程没有执行内容未进入内核
+
+```
+
+###### pthread_detach函数
+
+实现线程分离
+
+```int pthread_detach(pthread_t thread);``` 成功：0；失败：错误号
+
+线程分离状态：指定该状态，线程主动与主控线程断开关系。线程结束后，其退出状态不由其他线程获取，而直接自己自动释放。网络、多线程服务器常用。
+
+在线程中检查错误不再能使用perror()，而是应该查看返回的错误号，如strerror(错误号);
+
+##### 线程属性
+
+linux下线程的属性是可以根据实际项目需要，进行设置，之前我们讨论的线程都是采用线程的默认属性，默认属性已经可以解决绝大多数开发时遇到的问题。如我们对程序的性能提出更高的要求那么需要设置线程属性，比如可以通过设置线程栈的大小来降低内存的使用，增加最大线程个数。
+
+```c
+typedef struct {
+int    etachstate;   //线程的分离状态
+int    schedpolicy;  //线程调度策略
+struct sched_param     schedparam; //线程的调度参数
+int    inheritsched; //线程的继承性
+int    scope;       //线程的作用域
+size_t guardsize;    //线程栈末尾的警戒缓冲区大小
+int    stackaddr_set; //线程的栈设置
+void*  stackaddr;    //线程栈的位置
+size_t stacksize;     //线程栈的大小
+} pthread_attr_t;//此仅为示例，新版本linux内容不同
+```
+
+线程属性无法直接修改，需通过函数接口设置
+
+###### 线程属性初始化
+
+注意：应先初始化线程属性，再pthread_create创建线程
+
+创建线程属性结构体
+
+```pthread_attr_t attr;```
+
+初始化线程属性
+
+``` int pthread_attr_init(pthread_attr_t *attr);``` 成功：0；失败：错误号 
+
+销毁线程属性所占用的资源
+
+```int pthread_attr_destroy(pthread_attr_t *attr);```成功：0；失败：错误号
+
+###### 线程分离状态
+
+线程的分离状态决定一个线程以什么样的方式来终止自己。
+
+非分离状态：线程的默认属性是非分离状态，这种情况下，原有的线程等待创建的线程结束。只有当pthread_join()函数返回时，创建的线程才算终止，才能释放自己占用的系统资源。
+
+分离状态：分离线程没有被其他的线程所等待，自己运行结束了，线程也就终止了，马上释放系统资源。应该根据自己的需要，选择适当的分离状态。
+
+线程分离状态的函数：
+
+设置线程属性，分离or非分离
+
+```int pthread_attr_setdetachstate(pthread_attr_t *attr, int detachstate); ```
+
+获取线程属性，分离or非分离
+
+```int pthread_attr_getdetachstate(pthread_attr_t *attr, int *detachstate); ```
+
+参数：   attr：已初始化的线程属性
+
+detachstate： PTHREAD_CREATE_DETACHED（分离线程）PTHREAD _CREATE_JOINABLE（非分离线程）
+
+```c
+pthread_attr_t attr;//创建线程属性结构体
+int ret=pthread_attr_init(&attr);//初始化线程属性
+ret=pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);//设置线程属性为分离
+ret=pthread_create(&tid,%attr,tfn,NULL);//创建线程
+ret=pthread_attr_destroy(&attr);//销毁线程属性资源
+```
+
+##### 线程使用注意事项
+
+1. 主线程退出其他线程不退出，主线程应调用pthread_exit
+2. 避免僵尸线程
+
+pthread_join回收
+
+pthread_detach设置分离
+
+pthread_create指定分离属性
+
+被join线程可能在join函数返回前就释放完自己的所有内存资源，所以不应当返回被回收线程栈中的值;
+
+3. malloc和mmap申请的内存可以被其他线程释放 
+4. 应避免在多线程模型中调用fork，除非马上exec，子进程中只有调用fork的线程存在，其他线程在子进程中均pthread_exit
+5. 信号的复杂语义很难和多线程共存，应避免在多线程引入信号机制
+
+##### 线程同步
+
+同步即协同步调，按预定的先后次序运行。
+
+**线程同步，指一个线程发出某一功能调用时，在没有得到结果之前，该调用不返回。同时其它线程为保证数据一致性，不能调用该功能。**
+
+**所有“多个控制流，共同操作一个共享资源”的情况，都需要同步。**
+
+##### 互斥锁
+
+Linux中提供一把互斥锁mutex（也称之为互斥量）。
+
+每个线程在对资源操作前都尝试先加锁，成功加锁才能操作，操作结束解锁。互斥锁实质上是操作系统提供的一把“建议锁”（又称“协同锁”），建议程序中有多线程访问共享资源的时候使用该机制。但并没有强制限定。     
+
+因此，即使有了mutex，如果有线程不按规则来访问数据，依然会造成数据混乱。
+
+相关函数：
+
+```c
+pthread_mutex_t lock;//创建锁
+
+pthread_mutex_init();//初始化
+pthread_mutex_destroy();//销毁
+pthread_mutex_lock();//加锁
+pthread_mutex_trylock();
+pthread_mutex_unlock();//解锁
+//成功返回0，失败返回errno
+```
+
+pthread_mutex_t 类型，其本质是一个结构体。为简化理解，应用时可忽略其实现细节，**简单当成整数看待。**
+
+一般步骤为：创建锁->初始化->加锁->访问数据->解锁->销毁锁
+
+```c
+#include<stdio.h>
+#include<string.h>
+#include<pthread.h>
+#include<stdlib.h>
+#include<unistd.h>
+pthread_mutex_t mutex;
+void *tfn(void *arg)
+{
+    srand(time(NULL));
+    while(1)
+    {
+        pthread_mutex_lock(&mutex);	//加锁
+        printf("hello");
+        sleep(rand()%3);	//模拟长时间操作共享资源
+        printf("world\n");
+        pthread_mutex_unlock(&mutex);	//解锁
+        
+        sleep(rand()%3);
+    }
+    return NULL;
+}
+int main(void)
+{
+    pthread_t tid;
+    srand(time(NULL));
+    int ret=pthread_mutex_init(&mutex,NULL);//初始化互斥锁
+    if(ret!=0){
+        fprintf(stderr,"mutex init error:%s\n",strerror(ret));
+    }
+    pthread_create(&tid,NULL,tfn,NULL);
+    while(1){
+        pthread_mutex_lock(&mutex);	//加锁
+        printf("HELLO");
+        sleep(rand()%3);
+        printf("WORLD\n");
+        pthread_mutex_unlock(&mutex);	//解锁
+        
+        sleep(rand()%3);//将sleep放在锁外的原因是给其它线程竞争机会
+    }
+    pthread_join(tid,NULL);
+    pthread_mutex_destroy(&mutex);
+    return 0;
+}
+```
+
+注意事项：
+
+访问资源前加锁，访问完成后立即解锁，保证锁的粒度尽量小
+
+可以把互斥锁结构体看作整数，初值为1
+
+加锁：--操作，阻塞线程			解锁：++操作，唤醒阻塞的线程		try锁：尝试加锁，成功++，失败返回并设置错误号
+
+##### 读写锁
+
+与互斥量类似，但读写锁允许更高的并行性。其特性为：**写独占，读共享。**
+
+锁只有一把，读方式加锁为读锁，写方式加锁为写锁，写锁优先级更高
+
+```c
+pthread_rwlock_init();
+pthread_rwlock_destroy();
+pthread_rwlock_rdlock();
+pthread_rwlock_wrlock();
+pthread_rwlock_tryrdlock();
+pthread_rwlock_trywrlock();
+pthread_rwlock_unlock();
+//以上7 个函数的返回值都是：成功返回0， 失败直接返回错误号。	
+//pthread_rwlock_t类型	用于定义一个读写锁变量。
+pthread_rwlock_t rwlock;
+```
+
+##### 死锁现象
+
+1. 线程试图对同一个互斥量A加锁两次。
+
+2. 线程1拥有A锁，请求获得B锁；线程2拥有B锁，请求获得A锁，两个线程互相等待
