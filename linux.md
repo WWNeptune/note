@@ -2285,7 +2285,7 @@ pthread_create指定分离属性
 
 **所有“多个控制流，共同操作一个共享资源”的情况，都需要同步。**
 
-##### 互斥锁
+##### 互斥锁mutex
 
 Linux中提供一把互斥锁mutex（也称之为互斥量）。
 
@@ -2356,6 +2356,10 @@ int main(void)
 }
 ```
 
+动态初始化：pthread_mutex_init(&mutex,NULL);
+
+静态初始化：pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER//使用宏初始化
+
 注意事项：
 
 访问资源前加锁，访问完成后立即解锁，保证锁的粒度尽量小
@@ -2364,7 +2368,7 @@ int main(void)
 
 加锁：--操作，阻塞线程			解锁：++操作，唤醒阻塞的线程		try锁：尝试加锁，成功++，失败返回并设置错误号
 
-##### 读写锁
+##### 读写锁rwlock
 
 与互斥量类似，但读写锁允许更高的并行性。其特性为：**写独占，读共享。**
 
@@ -2387,4 +2391,344 @@ pthread_rwlock_t rwlock;
 
 1. 线程试图对同一个互斥量A加锁两次。
 
-2. 线程1拥有A锁，请求获得B锁；线程2拥有B锁，请求获得A锁，两个线程互相等待
+2. 线程1拥有A锁，请求获得B锁；线程2拥有B锁，请求获得A锁，两个线程互相等待  
+
+##### 条件变量
+
+本身不是锁，但它也可以造成线程阻塞。通常与互斥锁配合使用。给多线程提供一个会合的场所。
+
+```c
+pthread_cond_init;		//初始化函数
+pthread_cond_destroy	//销毁函数
+pthread_cond_wait		//阻塞等待函数
+pthread_cond_timedwait	//阻塞等待函数，包含超时设定
+pthread_cond_signal		//唤醒至少一个阻塞在条件变量上的线程
+pthread_cond_broadcast	//唤醒全部阻塞在条件变量上的线程
+//以上6 个函数的返回值都是：成功返回0， 失败直接返回错误号。
+pthread_cond_t			//条件变量类型	用于定义条件变量
+pthread_cond_t cond;
+```
+
+动态初始化：pthread_cond_init(&cond,NULL);
+
+静态初始化：pthread_cond_t mutex=PTHREAD_COND_INITIALIZER//使用宏初始化
+
+###### pthread_cond_wait
+
+阻塞等待一个条件变量满足
+
+1. 阻塞等待条件变量cond（参1）满足 
+2. 释放已掌握的互斥锁（解锁互斥量）相当于pthread_mutex_unlock(&mutex);
+
+ 			**1. 2.**两步为一个原子操作。
+
+3. 当被唤醒，pthread_cond_wait函数返回时，解除阻塞并重新申请获取互斥锁pthread_mutex_lock(&mutex);
+
+![条件变量阻塞](..\note\图\条件变量阻塞.jpg)
+
+###### 生产者消费者模型
+
+**消费者端：**
+
+1.创建锁 pthread_mutex_t mutex
+
+2.初始化pthread_mutex_init(&mutex,NULL)
+
+3.加锁pthread_mutex_lock(&lock)
+
+4.等待条件满足pthread_cond_wait(&cond,&mutex)
+
+​			1)阻塞等条件变量
+
+​			2)解锁unlock
+
+​			操作......
+
+​			3)加锁lock
+
+5.访问共享数据
+
+6.解锁，释放条件变量，销毁锁
+
+**生产者端：**
+
+1.生产数据
+
+2.尝试加锁pthread_mutex_lock(&mutex)
+
+3.将数据放入公共区域
+
+4.解锁pthread_mutex_unlock(&mutex)
+
+5.通知阻塞在条件变量的线程
+
+​	pthread_cond_signal()
+
+​	pthread_cond_broadcast()
+
+回到1
+
+```c
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include<unistd.h>
+#include<errno.h>
+#include<pthread.h>
+void err_thread(int ret,char *str){
+    if(ret!=0){
+        fprintf(stderr,"%s:%s\n",str,strerror(ret));
+        pthread_exit(NULL);
+    }
+}
+struct msg{
+    int num;
+    struct msg *next;
+};
+pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER;//定义并初始化互斥量
+pthread_cond_t has_data=PTHREAD_COND_INITIALIZER;//定义并初始化条件变量
+//此处省略返回值检查
+void *producer(void *arg)
+{
+    while(1){
+    struct msg *mp=malloc(sizeof(struct msg));
+    mp->num=rand()%1000+1;				//模拟生产数据
+    printf("produce data\n");
+    pthread_mutex_lock(&mutex);//加锁互斥量
+    mp->next=head;				//写公共区域
+    head=mp;
+    pthread_mutex_unlock(&mutex);//解锁互斥量
+    pthread_cond_signal(&had_data);//唤醒阻塞线程
+    sleep(rand()%3);
+    }
+    return NULL;
+}
+void *consumer(void *arg)
+{
+    while(1){
+    struct msg *mp;
+    pthread_mutex_lock(&mutex);//加锁互斥量
+    while(head==NULL){		/*当有多个消费者，被唤醒时都会跳出wait，但只有一份数据，所以要再次判断是否有数据*/
+        pthread_cond_wait(&had_data,&mutex);//阻塞等待条件变量,解锁
+    }										//pthread_cond_wait返回时重新加锁
+    mp=head;
+    head=mp->next;
+    pthread_mutex_unlock(&mutex);//解锁互斥量
+    printf("consumer:%d\n",mp->num);
+    free(mp);
+    sleep(rand()%3);
+    }
+    return NULL;
+}
+int main(int argc,char *argv[])
+{
+    int ret;
+    pthread_t pid,cid;
+    srand(time(NULL));
+    ret=pthread_create(&pid,NULL,producer,NULL);//生产者
+    
+    ret=pthread_create(&cid,NULL,consumer,NULL);//消费者
+    
+    pthread_join(pid,NULL);
+    pthread_join(cid,NULL);
+}
+```
+
+若有多个消费者，则应该先判断条件变量再唤醒，否则当前一个消费者结束后，下一个阻塞的消费者会立刻拿锁，造成空读阻塞
+
+##### 信号量
+
+相当于初始化值为N的互斥量，N表示可以同时访问共享数据区的线程数
+
+由于互斥锁的粒度比较大，如果我们希望在多个线程间对某一对象的部分数据进行共享，使用互斥锁是没有办法实现的，只能将整个数据对象锁住。这样虽然达到了多线程操作共享数据时保证数据正确性的目的，却无形中导致线程的并发性下降。线程从并行执行，变成了串行执行。与直接使用单进程无异。
+
+信号量，是相对折中的一种处理方式，既能保证同步，数据不混乱，又能提高线程并发。
+
+信号量与信号无关，即可用于线程，也能用于进程
+
+```c
+sem_init//初始化
+sem_destroy//销毁
+sem_wait//每调用一次做一次--操作，当信号量值为0时阻塞
+sem_trywait//尝试对信号量加锁
+sem_timedwait//限时尝试对信号量加锁
+sem_post//每调用一次做一次++操作，当信号量值为N时阻塞
+//以上6 个函数的返回值都是：成功返回0， 失败返回-1，同时设置errno。(注意，它们没有pthread前缀)
+//sem_t类型，本质仍是结构体。但应用期间可简单看作为整数，忽略实现细节（类似于使用文件描述符）。 
+sem_t sem;// 规定信号量sem不能 < 0。头文件 <semaphore.h
+```
+
+int sem_init(sem_t *sem, int pshared, unsigned int value);
+
+参1：sem信号量 
+
+参2：pshared取0用于线程间；取非0（一般为1）用于进程间 
+
+参3：value指定信号量初值
+
+###### 信号量实现生产者消费者模型
+
+在生产和消费时，资源数量会发生变化，可以用信号量来表示
+
+```c
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include<unistd.h>
+#include<errno.h>
+#include<pthread.h>
+#define NUM 5
+int quene[NUM];
+sem_t blank_number,product_number;
+void *producer(void *arg)
+{
+    int i=0;
+    while(1){
+        sem_wait(&blank_number);	//生产者将空格数--，为0则阻塞等待
+        quene[i]=rand()%1000+1;		//生产一个产品
+        printf("produce %d\n",quene[i]);
+        sem_post(&product_number);	//产品数++
+        i=(i+1)%NUM;				//借助下标实现环形
+        sleep(rand()%1);
+    }
+}
+void *consumer(void *arg)
+{
+    int i=0;
+    while(1){
+        sem_wait(&product_number);	//消费者将产品数--
+        printf("consume %d\n",quene[i]);
+        quene[i]=0;					//消费一个产品
+        sem_post(&blank_number);	//空格数++
+        i=(i+1)%NUM;
+        sleep(rand()%3);
+    }
+}
+int main(int argc,char *argv[]){
+    pthread_t pid,cid;
+    sem_init(&blank_number,0,NUM);
+    sem_init(&product_number,0,0);
+    
+    pthread_create(&pid,NULL,producer,NULL);
+    pthread_create(&cid,NULL,consumer,NULL);
+    
+    pthread_join(pid,NULL);
+    pthread_join(cid,NULL);
+    
+    sem_destroy(&blank_number);
+    sem_destroy(&product_number);
+    
+    return 0;
+}
+```
+
+## 网络编程
+
+### 网络基础知识
+
+协议：从应用的角度出发，协议可理解为“规则”，是数据传输和数据的解释的规则。
+
+
+
+TCP[传输控制协议](http://baike.baidu.com/view/544903.htm)（Transmission Control Protocol）是一种面向连接的、可靠的、基于字节流的[传输层](http://baike.baidu.com/view/239605.htm)通信协议。
+
+UDP用户数据报协议（User Datagram Protocol）是[OSI](http://baike.baidu.com/view/113948.htm)参考模型中一种无连接的[传输层](http://baike.baidu.com/view/239605.htm)协议，提供面向事务的简单不可靠信息传送服务。
+
+HTTP[超文本传输协议](http://baike.baidu.com/view/468465.htm)（Hyper Text Transfer Protocol）是[互联网](http://baike.baidu.com/view/6825.htm)上应用最为广泛的一种[网络协议](http://baike.baidu.com/view/16603.htm)。
+
+FTP文件传输协议（File Transfer Protocol）
+
+IP协议是[因特网](http://baike.baidu.com/view/1706.htm)互联协议（Internet Protocol）
+
+ICMP协议是Internet控制[报文](http://baike.baidu.com/view/175122.htm)协议（Internet Control Message Protocol）它是[TCP/IP协议族](http://baike.baidu.com/view/2221037.htm)的一个子协议，用于在IP[主机](http://baike.baidu.com/view/23880.htm)、[路由](http://baike.baidu.com/view/18655.htm)器之间传递控制消息。
+
+IGMP协议是 Internet 组管理协议（Internet Group Management Protocol），是因特网协议家族中的一个组播协议。该协议运行在主机和组播路由器之间。
+
+[ARP](http://baike.baidu.com/view/32698.htm)协议是正向[地址解析协议](http://baike.baidu.com/view/149421.htm)（Address Resolution Protocol），通过已知的IP，寻找对应主机的[MAC地址](http://baike.baidu.com/view/69334.htm)。
+
+[RARP](http://baike.baidu.com/view/32772.htm)是反向地址转换协议，通过MAC地址确定IP地址。
+
+
+
+TCP协议注重数据的传输。http协议着重于数据的解释。
+
+##### OSI7层与TCP4层
+
+![7层4层](..\note\图\7层4层.png)
+
+###### TCP/IP
+
+传输层 常见协议有TCP/UDP协议。
+
+应用层 常见的协议有HTTP协议，FTP协议，NFS，SSH，TELNET
+
+网络层 常见协议有IP协议、ICMP协议、IGMP协议。
+
+网络接口层 常见协议有ARP协议、RARP协议。
+
+![TCP封装](..\note\图\TCP封装.png)
+
+###### OSI七层
+
+1. **物理层**：主要定义物理设备标准，如网线的接口类型、光纤的接口类型、各种传输介质的传输速率等。它的主要作用是传输比特流（就是由1、0转化为电流强弱来进行传输，到达目的地后再转化为1、0，也就是我们常说的数模转换与模数转换）。这一层的数据叫做比特。
+2. **数据链路层**：定义了如何让格式化数据以帧为单位进行传输，以及如何让控制对物理介质的访问。这一层通常还提供错误检测和纠正，以确保数据的可靠传输。如：串口通信中使用到的115200、8、N、1
+3. **网络层**：在位于不同地理位置的网络中的两个主机系统之间提供连接和路径选择。Internet的发展使得从世界各站点访问信息的用户数大大增加，而网络层正是管理这种连接的层。
+4. **传输层**：定义了一些传输数据的协议和端口号（WWW端口80等），如：TCP（传输控制协议，传输效率低，可靠性强，用于传输可靠性要求高，数据量大的数据），UDP（用户数据报协议，与TCP特性恰恰相反，用于传输可靠性要求不高，数据量小的数据，如QQ聊天数据就是通过这种方式传输的）。 主要是将从下层接收的数据进行分段和传输，到达目的地址后再进行重组。常常把这一层数据叫做段。
+5. **会话层**：通过传输层(端口号：传输端口与接收端口)建立数据传输的通路。主要在你的系统之间发起会话或者接受会话请求（设备之间需要互相认识可以是IP也可以是MAC或者是主机名）。
+6. **表示层**：可确保一个系统的应用层所发送的信息可以被另一个系统的应用层读取。例如，PC程序与另一台计算机进行通信，其中一台计算机使用扩展二一十进制交换码(EBCDIC)，而另一台则使用美国信息交换标准码（ASCII）来表示相同的字符。如有必要，表示层会通过使用一种通格式来实现多种数据格式之间的转换。
+7. **应用层**：是最靠近用户的OSI层。这一层为用户的应用程序（例如电子邮件、文件传输和终端仿真）提供网络服务。
+
+ 
+
+##### C/S与B/S模型
+
+客户机(client)/服务器(server)模式。需要在通讯两端各自部署客户机和服务器来完成数据通信。
+
+浏览器(Browser)/服务器(Server)模式。只需在一端部署服务器，而另外一端使用每台PC都默认配置的浏览器即可完成数据的传输。
+
+|      | C/S                                                    | B/S                                |
+| ---- | ------------------------------------------------------ | ---------------------------------- |
+| 优点 | 缓存大量数据、协议，速度快                             | 安全性，跨平台，开发工作量小       |
+| 缺点 | 客户端安插至用户主机上，对用户主机的**安全性构成威胁** | 不能缓存大量数据，必须严格遵守http |
+
+
+
+##### 以太网帧格式
+
+根据MAC地址完成数据包传输
+
+![以太网帧](..\note\图\以太网帧.png)
+
+其中的源地址和目的地址是指网卡的硬件地址（也叫MAC地址），长度是48位。以太网帧中的数据长度规定最小46字节，最大1500字节，ARP和RARP数据包的长度不够46字节，要在后面补填充位。**最大值1500**称为以太网的最大传输单元（MTU）
+
+##### ARP数据报格式
+
+![以太网帧](..\note\图\arp.png)
+
+根据IP地址获取MAC地址
+
+##### IP协议
+
+![以太网帧](..\note\图\ip段.png)
+
+IP数据报的首部长度和数据长度都是可变长的，但总是**4字节的整数倍**。
+
+TTL：生存时间，限制跳转上限
+
+##### TCP/UDP数据报
+
+TCP稳定性好但开销大
+
+###### TCP
+
+![tcp数据报](D:\project\git-note\note\图\tcp数据报.png)
+
+###### UDP
+
+### SOCKET编程
+
+套接字：Socket本身有“插座”的意思，在Linux环境下，用于表示进程间网络通信的特殊文件类型。本质为内核借助缓冲区形成的伪文件。
+
+一个文件描述符指向一个套接字，该套接字内部由内核借助两个缓冲区实现
+
+**在网络通信中，套接字一定是成对出现的**
