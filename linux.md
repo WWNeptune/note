@@ -2731,4 +2731,177 @@ TCP稳定性好但开销大
 
 一个文件描述符指向一个套接字，该套接字内部由内核借助两个缓冲区实现
 
-**在网络通信中，套接字一定是成对出现的**
+**在网络通信中，套接字一定是成对出现的**。一端的发送缓冲区对应对端的接收缓冲区
+
+网络字节序：
+
+​						小端法：高位存高地址（PC本地）
+
+​						大端法：高位存低地址（网络存储）
+
+TCP/IP规定，网络数据流应采用**大端字节序**
+
+由于主机字节序为小端法，需要做网络字节序和主机字节序的转换
+
+```c
+#include <arpa/inet.h>
+
+uint32_t htonl(uint32_t hostlong);	//本地->网络(IP)
+uint16_t htons(uint16_t hostshort);	//本地->网络(port)
+uint32_t ntohl(uint32_t netlong);	//网络->本地(IP)
+uint16_t ntohs(uint16_t netshort);	//网络->本地(port)
+//ip地址转换函数
+#include <arpa/inet.h>
+int inet_pton(int af, const char *src, void *dst);
+const char *inet_ntop(int af, const void *src, char *dst, socklen_t size);
+```
+
+**int inet_pton(int af, const char *src, void *dst)**	成功：1	异常：0
+
+| af                          | src                      | dst                    |
+| --------------------------- | ------------------------ | ---------------------- |
+| (网络协议)AF_INET，AF_INET6 | 传入IP地址（点分十进制） | 传出转换后的网络字节序 |
+
+**const char *inet_ntop(int af, const void *src, char *dst, socklen_t size);**	成功：dst	失败：NULL
+
+| af                          | src                | dst                      | size    |
+| --------------------------- | ------------------ | ------------------------ | ------- |
+| (网络协议)AF_INET，AF_INET6 | 传入的网络字节序IP | 传出IP地址（点分十进制） | dst大小 |
+
+##### sockaddr地址模型
+
+```c
+struct sockaddr_in addr;		//创建sockaddr结构体
+addr.sin_family=AF_INET/AF_INET6;
+addr.sin_port=htons(端口号);
+inet_port(af,"ip地址",(void*)&dst);//dst要事先声明 int dst
+
+addr.sin_addr.s_addr=dst;
+addr.sin_addr.s_addr=htonl(INADDR_ANY);//或者使用宏，取出系统中有效的任意ip地址
+
+bind(fd,(struct sockaddr *)&addr,size);//根据函数要求进行格式转换
+```
+
+##### socket模型创建流程
+
+![socket模型创建](..\note\图\socket模型创建.png)
+
+一个服务器与一个客户端通信，共有**三个套接字**
+
+```c
+/*服务端*/
+socket();//创建套接字
+bind();//绑定ip和端口
+listen();//设置同时建立连接的上限数，最大128
+accept();//阻塞监听客户端连接
+```
+
+当accept与客户端成功建立连接，会返回一个**新的**socket文件描述符用来通信，原有的socket重复监听
+
+```c
+/*客户端*/
+socket();//创建套接字
+connect();//绑定ip和端口,与服务器建立连接
+```
+
+**int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);**
+
+sockdf:  	socket文件描述符
+
+addr:  		传出参数，返回链接客户端地址信息，含IP地址和端口号
+
+addrlen: 	传入传出参数（值-结果）,传入sizeof(addr)大小，函数返回时返回真正接收到地址结构体的大小
+
+返回值：  	成功返回一个新的socket文件描述符，用于和客户端通信，失败返回-1，设置errno
+
+
+
+当客户端没有使用bind()函数绑定地址结构，则会自动采用隐式绑定
+
+#### C/S模型-TCP
+
+以下目标：客户端发数据-->服务端处理数据-->客户端获取处理过的数据
+
+**server：**
+
+1.socket()	创建socke
+
+2.bind()		绑定服务器地址结构
+
+3.listen()		设置监听上限
+
+4.accept()		阻塞监听客户端连接
+
+5.read(fd)		读socket获取客户端数据
+
+6.数据操作
+
+7.write(fd)
+
+8.close()
+
+**client():**
+
+1.socket()	创建socke
+
+2.connect()	与服务器建立连接
+
+3.wirte()		写数据到socket
+
+4.read()		读取返回数据
+
+5.数据操作
+
+6.close()
+
+```c
+#include<stdio.h>
+#include<stdlib.h>
+#include<ctype.h>
+#include<sys/socket.h>
+#include<string.h>
+#include<unistd.h>
+#include<errno.h>
+#include<pthread.h>
+#include<arpa/inet.h>
+#define SERV_PORT 8088
+void sys_err(const char *str)
+{
+    perror(str);
+    exit(1);
+}
+int main(int argc,char *argv[])
+{
+    int lfd=0,cfd=0;
+    int ret,i;
+    char buf[BUFSIZ];
+    struct sockaddr_in serv_addr,clit_addr;
+    socklen_t clit_addr_len;
+    
+    serv_addr.sin_family=AF_INET;
+    serv_addr.sin_port=htons(SERV_PORT);
+    serv_addr.sin_addr.s_addr=htonl(INADDR_ANY);
+    lfd=socket(AF_INET,SOCK_STREAM,0);
+    if(lfd==-1){
+        sys_err("socket err");
+    }
+    bind(lfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr));
+    listen(lfd,128);
+    clit_addr_len=sizeof(clit_addr);
+    cfd=accept(lfd,(struct sockaddr *)&clit_addr,&clit_addr_len);
+    if(cfd==-1){
+        sys_err("accept err");
+    }
+    while(1){
+    	ret=read(cfd,buf,sizeof(buf));
+    	write(STDOUT_FILENO,buf,ret);
+    	for(i=0;i<ret;i++){
+    	    buf[i]=toupper(buf[i]);//此处小写转大写为目标转换，实际换为自己需要的计算
+    	}
+    	write(cfd,buf,ret);
+    }
+    
+    return 0;
+}
+```
+
