@@ -2713,7 +2713,11 @@ TCP协议注重数据的传输。http协议着重于数据的解释。
 
 IP数据报的首部长度和数据长度都是可变长的，但总是**4字节的整数倍**。
 
+版本：IPv4或IPv6
+
 TTL：生存时间，限制跳转上限
+
+源/目的IP：32位
 
 ##### TCP/UDP数据报
 
@@ -2721,13 +2725,21 @@ TCP稳定性好但开销大
 
 ###### TCP
 
-![tcp数据报](D:\project\git-note\note\图\tcp数据报.png)
+![tcp数据报](..\note\图\tcp数据报.png)
+
+16位源端口号，16位目的端口号，32位序号，32位确认序号，6个标志位，16位窗口大小
 
 ###### UDP
 
+16位源端口号，16位目的端口号
+
+##### 网络传输流程
+
+数据->应用层->传输层->网络层->链路层->网络环境
+
 ### SOCKET编程
 
-套接字：Socket本身有“插座”的意思，在Linux环境下，用于表示进程间网络通信的特殊文件类型。本质为内核借助缓冲区形成的伪文件。
+套接字：Socket本身有“插座”的意思，在Linux环境下，用于表示进程间网络通信的特殊文件类型。**本质为内核借助缓冲区形成的伪文件**。
 
 一个文件描述符指向一个套接字，该套接字内部由内核借助两个缓冲区实现
 
@@ -2741,7 +2753,7 @@ TCP稳定性好但开销大
 
 TCP/IP规定，网络数据流应采用**大端字节序**
 
-由于主机字节序为小端法，需要做网络字节序和主机字节序的转换
+由于主机字节序为小端法，需要做**网络字节序**和**主机字节序**的转换
 
 ```c
 #include <arpa/inet.h>
@@ -2752,8 +2764,8 @@ uint32_t ntohl(uint32_t netlong);	//网络->本地(IP)
 uint16_t ntohs(uint16_t netshort);	//网络->本地(port)
 //ip地址转换函数
 #include <arpa/inet.h>
-int inet_pton(int af, const char *src, void *dst);
-const char *inet_ntop(int af, const void *src, char *dst, socklen_t size);
+int inet_pton(int af, const char *src, void *dst);//本地转网络
+const char *inet_ntop(int af, const void *src, char *dst, socklen_t size);//网络转本地
 ```
 
 **int inet_pton(int af, const char *src, void *dst)**	成功：1	异常：0
@@ -2768,15 +2780,17 @@ const char *inet_ntop(int af, const void *src, char *dst, socklen_t size);
 | --------------------------- | ------------------ | ------------------------ | ------- |
 | (网络协议)AF_INET，AF_INET6 | 传入的网络字节序IP | 传出IP地址（点分十进制） | dst大小 |
 
-##### sockaddr地址模型
+##### sockaddr地址模型创建
+
+IP+端口
 
 ```c
 struct sockaddr_in addr;		//创建sockaddr结构体
 addr.sin_family=AF_INET/AF_INET6;
 addr.sin_port=htons(端口号);
-inet_port(af,"ip地址",(void*)&dst);//dst要事先声明 int dst
+inet_pton(af,"ip地址",(void*)&dst);//将ip转为网络字节序，dst要事先声明int
 
-addr.sin_addr.s_addr=dst;
+addr.sin_addr.s_addr=dst;//设定ip地址
 addr.sin_addr.s_addr=htonl(INADDR_ANY);//或者使用宏，取出系统中有效的任意ip地址
 
 bind(fd,(struct sockaddr *)&addr,size);//根据函数要求进行格式转换
@@ -2824,13 +2838,17 @@ addrlen: 	传入传出参数（值-结果）,传入sizeof(addr)大小，函数�
 
 **server：**
 
-1.socket()	创建socke
+1.socket(int domain, int type, int protocol)	创建socket
 
-2.bind()		绑定服务器地址结构
+2.bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen)		绑定服务器地址结构
 
-3.listen()		设置监听上限
+(socket文件描述符，sockaddr结构体,sizeof(addr)长度)
 
-4.accept()		阻塞监听客户端连接
+3.listen(int sockfd, int backlog)		设置监听上限	backlog：监听上限
+
+4.accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)		阻塞监听客户端连接
+
+addrlen：传入sizeof(addr)大小，函数返回时返回真正接收到地址结构体的大小
 
 5.read(fd)		读socket获取客户端数据
 
@@ -2844,7 +2862,19 @@ addrlen: 	传入传出参数（值-结果）,传入sizeof(addr)大小，函数�
 
 1.socket()	创建socke
 
-2.connect()	与服务器建立连接
+2.connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)	与服务器建立连接
+
+sockfd:  socket函数返回值
+
+struct sockaddr *addr:  服务器地址结构
+
+```c
+serv_addr.sin_family=AF_INET;
+serv_addr.sin_port=htons(SERV_PORT);    
+inet_pton(AF_INET,"服务器IP地址",&serv_addr.sin_addr.s_addr);//转换为网络字节序并设置，此处ip与端口必须和服务端设置一致
+```
+
+addrlen:  服务器地址结构的大小：sizeof(addr)
 
 3.wirte()		写数据到socket
 
@@ -2854,7 +2884,14 @@ addrlen: 	传入传出参数（值-结果）,传入sizeof(addr)大小，函数�
 
 6.close()
 
+###### 获取客户端地址结构
+
+```inet_ntop(AF_INET,&clit_addr.sin_addr.s_addr,client_IP,sizeof(client_IP))```获取IP
+
+```ntohs(clit_addr.sin_port))```获取端口
+
 ```c
+/*创建服务端进程，接收客户端文字并用大写返回*/
 #include<stdio.h>
 #include<stdlib.h>
 #include<ctype.h>
@@ -2874,24 +2911,28 @@ int main(int argc,char *argv[])
 {
     int lfd=0,cfd=0;
     int ret,i;
-    char buf[BUFSIZ];
-    struct sockaddr_in serv_addr,clit_addr;
-    socklen_t clit_addr_len;
+    char buf[BUFSIZ],client_IP[1024];
     
+    struct sockaddr_in serv_addr,clit_addr;    
+    socklen_t clit_addr_len;
     serv_addr.sin_family=AF_INET;
     serv_addr.sin_port=htons(SERV_PORT);
-    serv_addr.sin_addr.s_addr=htonl(INADDR_ANY);
-    lfd=socket(AF_INET,SOCK_STREAM,0);
+    serv_addr.sin_addr.s_addr=htonl(INADDR_ANY);//构建地址结构
+    
+    lfd=socket(AF_INET,SOCK_STREAM,0);//创建套接字
     if(lfd==-1){
         sys_err("socket err");
     }
-    bind(lfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr));
+    bind(lfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr));//绑定服务器地址结构
     listen(lfd,128);
     clit_addr_len=sizeof(clit_addr);
     cfd=accept(lfd,(struct sockaddr *)&clit_addr,&clit_addr_len);
     if(cfd==-1){
         sys_err("accept err");
     }
+    printf("client ip:%s port:%d\n",
+           inet_ntop(AF_INET,&clit_addr.sin_addr.s_addr,client_IP,sizeof(client_IP)),
+          ntohs(clit_addr.sin_port));//获取客户端IP
     while(1){
     	ret=read(cfd,buf,sizeof(buf));
     	write(STDOUT_FILENO,buf,ret);
@@ -2904,4 +2945,339 @@ int main(int argc,char *argv[])
     return 0;
 }
 ```
+1创建
 
+```c
+/*创建客户端进程*/
+#include<stdio.h>
+#include<stdlib.h>
+#include<ctype.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<string.h>
+#include<unistd.h>
+#include<errno.h>
+#include<pthread.h>
+#define SERV_PORT 8088
+void sys_err(const char *str)
+{
+    perror(str);
+    exit(1);
+}
+int main(int argc,char *argv[])
+{
+    int cfd;
+    int conter=10;//设置写入次数
+    char buf[BUFSIZ];
+    struct sockaddr_in,*serv_addr;//服务器地址结构
+    serv_addr.sin_family=AF_INET;
+    serv_addr.sin_port=htons(SERV_PORT);    
+    inet_pton(AF_INET,"127.0.0.1",serv_addr.sin_addr.s_addr);//转换为网络字节序并设置，此处ip与端口必须和服务端设置一致
+    
+    cfd=socket(AF_INET,SOCK_STREAM,0);
+    if(cfd==-1)
+        sys_err("socket error");
+    
+    int ret=connect(cfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr));
+    if(ret!=0)
+        sys_err("connect error");
+    while(--conter)
+    {
+        write(cfd,"hello",5);//向客户端写数据
+        ret=read(cfd,buf,sizeof(buf));//接收客户端数据
+        write(STDOUT_FILENO,buf,ret);
+        sleep(1);
+    }
+    close(cfd);
+    return 0;
+}
+```
+
+###### TCP通信时序——三次握手四次挥手
+
+![三次握手](..\note\图\三次握手.jpg)
+
+SYN：请求建立连接标志位，SYN后会携带一个头包号，对方回复时会在ACK后加接收尾包号
+
+ACK：同意连接
+
+FIN：关闭连接
+
+二者各自拥有一个包号，全称沿用，根据包号回执来判断包是否完整接收，回执号与ACK一起，如发8001(10)，回复ACK 8011
+
+断开为4次原因是半关闭，本质是关闭缓冲区
+
+三次握手发生在内核空间，accept()和connect()函数会体现该过程
+
+流量控制：滑动窗口，根据缓冲区大小制定，防止传输速度大于处理速度
+
+![tcp通讯流程](..\note\图\tcp通讯流程.jpg)
+
+CLOSED->SYN_SENT->SYN_RCVD->ESTABLISHED	建立连接	FIN_WAIT_1->CLOSE_WAIT->FIN_WAIT_2	半关闭	LAST_ACK->TIME_WAIT->CLOSED
+
+#### 出错处理封装函数
+
+系统调用不能保证每次都成功，必须进行出错处理，这样一方面可以保证程序逻辑正常，另一方面可以迅速得到故障信息。
+
+为使错误处理的代码不影响主程序的可读性，我们把与socket相关的一些系统函数加上错误处理代码包装成新的函数，做成一个模块wrap.c：
+
+```c
+//wrap.c
+#include <stdlib.h>
+#include <errno.h>
+#include <sys/socket.h>
+void perr_exit(const char *s)
+{
+	perror(s);
+	exit(1);
+}
+int Accept(int fd, struct sockaddr *sa, socklen_t *salenptr)
+{
+	int n;
+	again:
+	if ( (n = accept(fd, sa, salenptr)) < 0) {
+		if ((errno == ECONNABORTED) || (errno == EINTR))
+			goto again;
+		else
+			perr_exit("accept error");
+	}
+	return n;
+}
+int Bind(int fd, const struct sockaddr *sa, socklen_t salen)
+{
+	int n;
+	if ((n = bind(fd, sa, salen)) < 0)
+		perr_exit("bind error");
+	return n;
+}
+int Connect(int fd, const struct sockaddr *sa, socklen_t salen)
+{
+	int n;
+	if ((n = connect(fd, sa, salen)) < 0)
+		perr_exit("connect error");
+	return n;
+}
+int Listen(int fd, int backlog)
+{
+	int n;
+	if ((n = listen(fd, backlog)) < 0)
+		perr_exit("listen error");
+	return n;
+}
+int Socket(int family, int type, int protocol)
+{
+	int n;
+	if ( (n = socket(family, type, protocol)) < 0)
+		perr_exit("socket error");
+	return n;
+}
+ssize_t Read(int fd, void *ptr, size_t nbytes)
+{
+	ssize_t n;
+again:
+	if ( (n = read(fd, ptr, nbytes)) == -1) {
+		if (errno == EINTR)
+			goto again;
+		else
+			return -1;
+	}
+	return n;
+}
+ssize_t Write(int fd, const void *ptr, size_t nbytes)
+{
+	ssize_t n;
+again:
+	if ( (n = write(fd, ptr, nbytes)) == -1) {
+		if (errno == EINTR)
+			goto again;
+		else
+			return -1;
+	}
+	return n;
+}
+int Close(int fd)
+{
+	int n;
+	if ((n = close(fd)) == -1)
+		perr_exit("close error");
+	return n;
+}
+ssize_t Readn(int fd, void *vptr, size_t n)
+{
+	size_t nleft;
+	ssize_t nread;
+	char *ptr;
+
+	ptr = vptr;
+	nleft = n;
+
+	while (nleft > 0) {
+		if ( (nread = read(fd, ptr, nleft)) < 0) {
+			if (errno == EINTR)
+				nread = 0;
+			else
+				return -1;
+		} else if (nread == 0)
+			break;
+		nleft -= nread;
+		ptr += nread;
+	}
+	return n - nleft;
+}
+
+ssize_t Writen(int fd, const void *vptr, size_t n)
+{
+	size_t nleft;
+	ssize_t nwritten;
+	const char *ptr;
+
+	ptr = vptr;
+	nleft = n;
+
+	while (nleft > 0) {
+		if ( (nwritten = write(fd, ptr, nleft)) <= 0) {
+			if (nwritten < 0 && errno == EINTR)
+				nwritten = 0;
+			else
+				return -1;
+		}
+		nleft -= nwritten;
+		ptr += nwritten;
+	}
+	return n;
+}
+
+static ssize_t my_read(int fd, char *ptr)
+{
+	static int read_cnt;
+	static char *read_ptr;
+	static char read_buf[100];
+
+	if (read_cnt <= 0) {
+again:
+		if ((read_cnt = read(fd, read_buf, sizeof(read_buf))) < 0) {
+			if (errno == EINTR)
+				goto again;
+			return -1;	
+		} else if (read_cnt == 0)
+			return 0;
+		read_ptr = read_buf;
+	}
+	read_cnt--;
+	*ptr = *read_ptr++;
+	return 1;
+}
+
+ssize_t Readline(int fd, void *vptr, size_t maxlen)
+{
+	ssize_t n, rc;
+	char c, *ptr;
+	ptr = vptr;
+
+	for (n = 1; n < maxlen; n++) {
+		if ( (rc = my_read(fd, &c)) == 1) {
+			*ptr++ = c;
+			if (c == '\n')
+				break;
+		} else if (rc == 0) {
+			*ptr = 0;
+			return n - 1;
+		} else
+			return -1;
+	}
+	*ptr = 0;
+	return n;
+}
+```
+
+```c
+//wrap.h
+#ifndef __WRAP_H_
+#define __WRAP_H_
+void perr_exit(const char *s);
+int Accept(int fd, struct sockaddr *sa, socklen_t *salenptr);
+int Bind(int fd, const struct sockaddr *sa, socklen_t salen);
+int Connect(int fd, const struct sockaddr *sa, socklen_t salen);
+int Listen(int fd, int backlog);
+int Socket(int family, int type, int protocol);
+ssize_t Read(int fd, void *ptr, size_t nbytes);
+ssize_t Write(int fd, const void *ptr, size_t nbytes);
+int Close(int fd);
+ssize_t Readn(int fd, void *vptr, size_t n);
+ssize_t Writen(int fd, const void *vptr, size_t n);
+ssize_t my_read(int fd, char *ptr);
+ssize_t Readline(int fd, void *vptr, size_t maxlen);
+#endif
+```
+
+### 高并发服务器
+
+#### 多进程并发服务器
+
+使用多进程并发服务器时要考虑以下几点：
+
+1. 父进程最大文件描述个数(父进程中需要close关闭accept返回的新文件描述符)
+2. 系统内创建进程个数(与内存大小相关)
+3. 进程创建过多是否降低整体服务性能(进程调度)
+
+**创建流程：**
+
+```c
+1.socket()	创建监听socket
+2.bind()		绑定服务器地址结构
+3.listen()
+4.while(1){
+	cfd=Accept(lfd);		//接收客户端连接请求
+	pid=fork();
+	if (pid==0){
+        close(lfd);	//关闭用于连接的套接字lfd
+		read();
+		数据操作
+		write();}
+		}else if(pid>0){
+		close(cfd);	//关闭用于与客户端通信的套接字cfd
+		continue;}
+}
+```
+
+5.子进程：
+```c
+close(lfd);
+	read();
+	操作;
+	write();
+父进程：
+	close(fd);
+	注册信号捕捉函数		SIGCHLD
+	在回调函数中完成子进程回收
+	while(waitpid())
+```
+
+#### 多线程并发服务器
+
+在使用线程模型开发服务器时需考虑以下问题：
+
+1. 调整进程内最大文件描述符上限
+2. 线程如有共享数据，考虑线程同步
+3. 服务于客户端线程退出时，退出处理。（退出值，分离态）
+4. 系统负载，随着链接客户端增加，导致其它线程不能及时得到CPU
+
+**创建流程：**
+```c
+1.socket()	创建监听socket
+2.bind()		绑定服务器地址结构
+3.listen()
+4.while(1){
+	cfd=Accept(lfd);		//接收客户端连接请求
+	pthread_create(&tid,NULL,tfn,NULL);
+	ptjread_datech(tid);//如果想回收子线程返回值，使用pthread_join(tid,void**)	另外为了防止信号与线程冲突，创建一个新线程用于子线程回收（兄弟进程之间不能用这个方法）
+}
+5.子线程
+void *tfn(void *arg)	//回调函数
+{
+	close(lfd);	//关闭用于连接的套接字lfd
+	read(cfd);
+	数据操作
+	write(cfd);
+}
+```
