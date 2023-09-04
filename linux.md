@@ -3369,3 +3369,107 @@ void FD_SET(int fd, fd_set *set); 	//把文件描述符集合里fd位置1
 void FD_ZERO(fd_set *set); 			//把文件描述符集合里所有位清0
 ```
 
+socket创建
+
+```c
+lfd=socket();				//创建套接字
+bind();						//绑定地址结构
+listen();					//设置监听上限
+fd_set rset,allset;				//创建监听集合
+FD_ZERO(&allset);				//将监听集合清空
+FD_SET(lfd,&allset);			//将lfd添加到读集合
+while(1){
+    rset=allset;			//保存监听对象
+	ret=select(lfd+1,&rset,NULL,NULL,timeval类型(可以是NULL));		//监听文件描述符集合对应事件
+	if (ret >0){				/*有监听的描述符满足对应事件*/
+    	if (FD_ISSET(lfd,&rset)){			//1在，0不在
+        	cfd=accept();			//建立连接，返回用于通信的文件描述符
+        	FD_SET(cfd,&allset);	//添加到监听通信描述符集合中
+    	}
+        for(i=lfd+1;i<=最大文件描述符;i++){
+            FD_ISSET(lfd,&rset);			//有read,write事件发生
+        	read();
+            /*数据操作*/
+            write();
+        }
+	}
+}
+```
+
+```c
+#include<stdio.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<string.h>
+#include<arpa/inet.h>
+#include<ctype.h>
+
+#include "wrap.h"
+
+#define SERV_PORT 8088
+
+int main(int argc,char *argv[])
+{
+    int i,j,n,nready;
+    int maxfd=0;
+    int listenfd,connfd;//监听和连接fd
+    char buf[BUFSIZ];
+
+    struct sockaddr_in clie_addr,serv_addr;
+    socklen_t clie_addr_len;
+
+    listenfd =Socket(AF_INET,SOCK_STREAM,0);
+    int opt=1;
+    setsockopt(listenfd,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));
+    bzero(&serv_addr,sizeof(serv_addr));
+    serv_addr.sin_family=AF_INET;
+    serv_addr.sin_addr.s_addr=htonl(INADDR_ANY);
+    serv_addr.sin_port=htons(SERV_PORT);
+
+    Bind(listenfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr));
+    Listen(listenfd,128);
+    fd_set rset,allset;         //rset用来读事件文件描述符集合，allset用来暂存
+    maxfd=listenfd;
+
+    FD_ZERO(&allset);
+    FD_SET(listenfd,&allset);   //构造select监控文件描述符集
+
+    while (1)
+    {
+        rset=allset;            //每次循环重新设置监控信号集
+        nready=select(maxfd+1,&rset,NULL,NULL,NULL);
+        if(nready<0)
+            perr_exit("select err");
+        if(FD_ISSET(listenfd,&rset)){       /*listenfd有事件，有新的客户端链接请求*/
+            clie_addr_len=sizeof(clie_addr);
+            connfd=Accept(listenfd,(struct sockaddr *)&clie_addr,&clie_addr_len);       //accept不会阻塞
+            FD_SET(connfd,&allset);             //向监控文件描述符集合allset添加新的文件描述符connfd
+
+            if(maxfd<connfd)    //新产生的文件描述符比max大，更新max
+                maxfd=connfd;
+            if(0==--nready)                 // 说明select只返回了一个listenfd，后续的for不需要执行
+                continue;            
+        }
+
+        for(i=listenfd+1;i<=maxfd;i++){     /*除了listenfd还有别的位，检查有哪个fd有通信*/
+            if(FD_ISSET(i,&rset)){          /*当前i位置有写入*/
+                if((n=Read(i,buf,sizeof(buf)))==0){ /*读取完毕，此时对端client关闭链接，则服务端也关闭对应链接*/
+                    Close(i);
+                    FD_CLR(i,&allset);
+                }
+                else if(n>0){               /*还有数据没读完*/
+                    for(j=0;j<n;j++)
+                        buf[j]=toupper(buf[j]);
+                    write(STDOUT_FILENO,buf,n);    
+                    Write(i,buf,n);
+                }
+            }
+        }
+    }
+
+    Close(listenfd);
+    return 0;
+    
+}
+```
+
