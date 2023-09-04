@@ -3015,6 +3015,43 @@ FIN：关闭连接
 
 CLOSED->SYN_SENT->SYN_RCVD->ESTABLISHED	建立连接	FIN_WAIT_1->CLOSE_WAIT->FIN_WAIT_2	半关闭	LAST_ACK->TIME_WAIT->CLOSED
 
+![tcp状态转换](..\note\图\tcp状态转换.jpg)
+
+
+
+主动发起端：**CLOSE**——发送SYN——**SYN_SEND**——接收ACK，SYN——**SYN_SEND**——发送ACK——**ESTABLISHED**
+
+主动关闭端：**ESTABLISHED**——发送FIN——**FIN_WAIT_1**——接收ACK——**FIN_WAIT_2(半关闭)**——接收对方FIN——**FIN_WAIT_2**——回发ACK——**TIME_WAIT**
+
+被动连接端：**CLOSE**——**LISTEN**——接收SYN——**LISTEN**——发送ACK，SYN——**SYN_RCVD**——接收ACK——**ESTABLISHED**
+
+被动关闭端：**ESTABLISHED**——接收FIN——**ESTABLISHED**——发送ACK——**CLOSE_WAIT**——发送FIN——**LAST_ACK**——接收ACK——**CLOSE**
+
+###### 2MSL时长
+
+主动关闭的一方在TIME_WAIT后会经历TIME_WAIT后再进入close状态，而被动端则没有，每次接收FIN会重新计时
+
+保证最后一个ACK被对方接收，如果对方没收到会继续发FIN，**让4次握手关闭流程更加可靠**
+
+###### 端口复用函数
+
+在server的TCP连接没有完全断开之前不允许重新监听是不合理的。因为，TCP连接没有完全断开指的是connfd（127.0.0.1:6666）没有完全断开，而我们重新监听的是listenfd（0.0.0.0:6666），虽然是占用同一个端口，但IP地址不同，connfd对应的是与某个客户端通讯的一个具体的IP地址，而listenfd对应的是wildcard address。解决这个问题的方法是使用setsockopt()设置socket描述符的选项SO_REUSEADDR为1，表示允许创建端口号相同但IP地址不同的多个socket描述符。
+
+在server代码的socket()和bind()调用之间插入如下代码：
+
+```c
+int opt = 1;//1为生效
+setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+```
+
+###### 半关闭
+
+通信双方中只有一端关闭通信【FIN_WAIT_2】，但一般看不到这个状态，可以使用shutdown()函数实现
+
+使用close中止一个连接，但它只是减少描述符的引用计数，并不直接关闭连接，只有当描述符的**引用计数为0**时才关闭连接。
+
+**shutdown**不考虑描述符的引用计数，**直接关闭描述符**。也可选择中止一个方向的连接，只中止读或只中止写。
+
 #### 出错处理封装函数
 
 系统调用不能保证每次都成功，必须进行出错处理，这样一方面可以保证程序逻辑正常，另一方面可以迅速得到故障信息。
@@ -3253,6 +3290,12 @@ close(lfd);
 	while(waitpid())
 ```
 
+```c
+#
+```
+
+
+
 #### 多线程并发服务器
 
 在使用线程模型开发服务器时需考虑以下问题：
@@ -3281,3 +3324,48 @@ void *tfn(void *arg)	//回调函数
 	write(cfd);
 }
 ```
+
+**read返回0代表已经读到末尾，对端已经关闭**
+
+### 多路I/O转接服务器
+
+由于原程序每次需要程序阻塞等待与接收，当连接数很多时会影响效率
+
+该类服务器实现的主旨思想是，不再由应用程序自己监视客户端连接，取而代之由内核替应用程序监视文件。
+
+主要使用的方法有三种：select，poll，epoll
+
+#### select
+
+select代理accept进行监听，当发生连接时由select接收并转至accept，accept生成接收文件描述符后转交select，待有数据传入时再由select转入用户程序
+
+select采用的是轮询模型，解决1024以下客户端时使用select是很合适的，但如果链接客户端过多，会大大降低服务器响应效率
+
+```c
+int select(int nfds, fd_set *readfds, fd_set *writefds,	fd_set *exceptfds, struct timeval *timeout);
+```
+
+nfds: 			监控的所有文件描述符集里**最大文件描述符加1**，因为此参数会告诉内核检测前多少个文件描述符的状态（循环上限）
+readfds：	监控有读数据到达文件描述符集合，传入传出参数
+writefds：	监控写数据到达文件描述符集合，传入传出参数
+exceptfds：	监控异常发生达文件描述符集合,如带外数据到达异常，传入传出参数
+
+**描述符放入以上三个集合表示进行对应的监听，传入的是需要监听的，传出时是实际发生事件的**，数据模型为位图
+
+timeout：	定时阻塞监控时间，3种情况
+	1.NULL，永远等下去
+	2.设置timeval，等待固定时间
+	3.设置timeval里时间均为0，检查描述字后立即返回，轮询
+
+```c
+struct timeval {
+	long tv_sec; /* seconds */
+	long tv_usec; /* microseconds */
+};
+/*文件描述符集合操作函数*/
+void FD_CLR(int fd, fd_set *set); 	//把文件描述符集合里fd位清0
+int FD_ISSET(int fd, fd_set *set); 	//测试文件描述符集合里fd是否置1
+void FD_SET(int fd, fd_set *set); 	//把文件描述符集合里fd位置1
+void FD_ZERO(fd_set *set); 			//把文件描述符集合里所有位清0
+```
+
