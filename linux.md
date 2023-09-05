@@ -3473,3 +3473,66 @@ int main(int argc,char *argv[])
 }
 ```
 
+核心为循环遍历部分，每次从select中取出描述符，如果不为零说明发生连接或者数据传递，listen的fd为最低位，而新建立的connect的fd为最高位，在此范围遍历即可
+
+优点：是多路IO转接中唯一一种可以跨平台
+
+缺点：如果fd跨度大且分布散乱，则会有很长的遍历范围，且文件描述符最大为1024
+
+改进：可以将for循环改成一个自定义数组，将使用的fd添加到数组中，使用时只需查询数组头部不为-1的值即可
+
+```c
+int client[FD_SETSIZE];
+for(i=0;i<FD_SETSIZE;i++){
+    client[i]=-1;//初始化
+}
+for(i=0;i<FD_SETSIZE;i++)
+{
+    if(client[i]=-1)
+    {
+        client[i]=fd;//添加fd
+        break;
+    }
+}
+for(i=0;i<=maxi;i++){
+    if((sockfd=client[i])<0)
+        continue;//没在数组里就不用判断
+    if(FD_ISSET(sockfd,&rset)){
+        if((n=Read(sockfd,buf,sizeof(buf)))==0){
+            Close(sockfd);
+            FD_CLR(sockfd,&allset);
+            client[i]=-1;
+        }else if(n>0){
+            for(j=0;j<n;j++)
+                buf[j]=toupper(buf[j]);
+            write(sockfd,buf,n);
+        }
+        if(--nready==0)
+            break;
+    }
+}
+```
+
+#### poll
+
+```c
+int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+```
+
+fds：pollfd结构体数组，包含了fd和读写事件
+
+nfds：监控数组中有多少文件描述符需要被监控
+
+timeout：超时时长，单位是毫秒
+
+返回值：返回满足对应监听事件的文件描述符总个数
+
+
+
+如果不再监控某个文件描述符时，可以把pollfd中，fd设置为-1，poll不再监控此pollfd，下次返回时，把revents设置为0。
+
+相较于select而言，poll的优势：
+
+​     1. 传入、传出事件分离。无需每次调用时，重新设定监听事件。
+
+​     2. 文件描述符上限，可突破1024限制。能监控的最大上限数可使用配置文件调整
