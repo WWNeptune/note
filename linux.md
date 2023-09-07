@@ -3533,6 +3533,133 @@ timeout：超时时长，单位是毫秒
 
 相较于select而言，poll的优势：
 
-​     1. 传入、传出事件分离。无需每次调用时，重新设定监听事件。
+​     1. 自带数组结构，可以将传入、传出事件分离。无需每次调用时，重新设定监听事件。
 
-​     2. 文件描述符上限，可突破1024限制。能监控的最大上限数可使用配置文件调整
+        2. 文件描述符上限，可突破1024限制。能监控的最大上限数可使用配置文件调整
+
+缺点：不能跨平台，无法直接定位满足监听事件的文件描述符（和select一样）
+
+```c
+struct pollfd pfds[1024];
+pfds[0].fd=lfd;
+pfd[0].events=POLLIN;
+pfds[0].revents=0;
+//根据需求逐个设置
+......
+    while(1){
+        int ret=poll(pfds,5,-1);
+        for(i=0;i<5;i++){
+            if(pfds[i].revents&POLLIN)//判断事件发生
+                Accept();
+            Read();wirte();
+        }
+    }
+```
+
+###### 突破1024文件描述符限制
+
+```shell
+sudo vi /etc/security/limits.conf
+#在文件尾部写入以下配置,soft软限制，hard硬限制。如下图所示。
+*	soft nofile 65536
+*	hard nofile 100000
+#*后面接tab
+```
+
+查询当前计算机打开最多文件数```cat /proc/sys/fs/file-max```
+
+当前用户下进程```ulimit -a```
+
+#### epoll
+
+epoll是Linux下多路复用IO接口select/poll的增强版本，它能显著提高程序在**大量并发连接中只有少量活跃**的情况下的系统CPU利用率，因为它会复用文件描述符集合来传递结果而不用迫使开发者每次等待事件之前都必须重新准备要被侦听的文件描述符集合，另一点原因就是获取事件的时候，它无须遍历整个被侦听的描述符集，只要遍历那些被内核IO事件异步唤醒而加入Ready队列的描述符集合就行了
+
+epoll本质是一棵平衡二叉树——红黑树
+
+```c
+epoll_create(int size);//创建根节点
+//size:红黑树监听节点数量（供内核参考）			成功返回根节点fd，失败-1
+epoll_ctl(int epfd,int op,int fd,struct epoll_event *event);//操作树
+//epfd:根结点fd	op：要对该监听红黑树的操作		fd:待监听的fd	event：本质是结构体  包含events和data（联合体）
+//成功返回0 失败-1与errno
+epoll_wait(int epfd,struct epoll_event *events,int maxevents,int timeout);//阻塞监听
+//此处events是数组，用来存事件的集合，和event不同
+//epfd:epoll_create：函数返回值	events：传出参数，满足条件的fd结构体	maxevents：数组，元素的总个数
+//timeout	-1：阻塞  0：不阻塞	>0:超时时间
+//返回值：满足监听的总个数	可以用作循环上限
+```
+
+实现思路：
+
+```c
+lfd=socket();
+bind();
+listen();
+int epfd=epoll_create();     //获得根节点
+struct epoll_event tep,ep[1024];		//tep:设置单个fd属性		ep：满足监听事件的数组
+tep.events=EPOLLIN;
+tep.data.fd=lfd;
+epoll_ctl(epfd,EPOLL_CTL_ADD, lfd, &tep);	//将lfd添加到监听红黑树
+while(1){
+	ret=epoll_wait(epfd,ep,1024,-1);		/*进行监听*/
+	for(i=0;i<ret;i++){
+		if(ep[i].data.fd==lfd){			/*lfd满足读事件，有新的连接请求*/
+            cfd=Accept();
+            tep.events=EPOLLIN;			/*初始化cfd监听属性*/
+            tep.data.fd=cfd;
+            epoll_ctl(epfd,EPOLL_CTL_ADD,cfd,&tep);
+		}else{							/*cfd满足读事件，有客户端写数据*/
+            n=read();
+            if(n==0){
+                close(ep[i].data.fd);
+                epoll_ctl(epfd,EPOLL_CTL_ADD,cfd,&tep);	/*将关闭的cfd从树上取下*/
+            }else if(n>0){
+                /*数据操作*/
+                write(ep[i].data.fd,buf,n);
+            }
+        }
+}
+}
+```
+
+##### ET/LT触发模式
+
+ET边缘触发：只有新的事件满足才会触发	
+
+LT水平触发：缓冲区未读尽的数据会导致epoll_wait返回
+
+LT(level triggered)：LT是**缺省**的工作方式，并且同时支持block和no-block socket。在这种做法中，内核告诉你一个文件描述符是否就绪了，然后你可以对这个就绪的fd进行IO操作。如果你不作任何操作，内核还是会继续通知你的。传统的**select/poll**都是这种模型的代表。
+
+ET(edge-triggered)：ET是**高速**工作方式，只支持no-block socket（非阻塞）。在这种模式下，当描述符从未就绪变为就绪时，内核通过epoll告诉你。然后它会假设你知道文件描述符已经就绪，并且不会再为那个文件描述符发送更多的就绪通知。请注意，如果一直不对这个fd作IO操作(从而导致它再次变成未就绪)，内核不会发送更多的通知(only once).
+
+```c
+struct epoll_event event;
+event.events=EPOLLIN|EPOLLET;
+epoll_ctl(epfd,EPOLL_CTL_ADD,cfd,&event);
+int flg=fcntl(cfd,F_GETFL);
+flg|=O_NONBLOCK;
+fcntl(cfd,F_SETFL,flg);
+```
+
+##### epoll反应堆
+
+**epoll ET模式+非阻塞+void* ptr(回调函数)**
+
+ptr这个泛型指针指向了一个结构体，结构体中存储了fd相关的一切资源，包括数据buf等，结构体中包含有一个**回调函数**，有事件发生的时候调用这个回调函数就行了，是手动调用的
+
+在epoll_ctl中传入的event是结构体，其中包含了成员data。data是共用体，其中包含int fd和void *ptr，此时我们可以自定义结构体传入该ptr
+
+```c
+struct evt{
+    int fd;
+    void (*func)(int fd);
+} *ptr;
+```
+
+原来流程：
+
+socket,bind,listen——epoll_create创建监听红黑树——返回epfd——epoll_ctl向树上添加一个监听fd——while(1)——epoll_wait监听——对应监听fd事件发生——返回监听满足数组——判断返回数组元素——lfd满足——Accept——cfd满足——read——数据操作——write
+
+epoll反应堆：**不但监听cfd的读事件，还要监听写事件**
+
+socket,bind,listen——epoll_create创建监听红黑树——返回epfd——epoll_ctl向树上添加一个监听fd——while(1)——epoll_wait监听——对应监听fd事件发生——返回监听满足数组——判断返回数组元素——lfd满足——Accept——cfd满足——read——数据操作——**（区别）**——cfd从树上摘下——EPOLLOUT——回调函数——epoll_ctl()——EPOLL_CTL_ADD重新放到树上监听写事件——等待epoll_wait返回——说明cfd可写——write回去——cfd从监听红黑树摘下——EPOLLIN——epoll_ctl——EPOLL_CTL_ADD重新放到树上监听读事件——epoll_wait监听
