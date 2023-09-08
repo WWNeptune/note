@@ -3662,4 +3662,6 @@ socket,bind,listen——epoll_create创建监听红黑树——返回epfd——e
 
 epoll反应堆：**不但监听cfd的读事件，还要监听写事件**
 
-socket,bind,listen——epoll_create创建监听红黑树——返回epfd——epoll_ctl向树上添加一个监听fd——while(1)——epoll_wait监听——对应监听fd事件发生——返回监听满足数组——判断返回数组元素——lfd满足——Accept——cfd满足——read——数据操作——**（区别）**——cfd从树上摘下——EPOLLOUT——回调函数——epoll_ctl()——EPOLL_CTL_ADD重新放到树上监听写事件——等待epoll_wait返回——说明cfd可写——write回去——cfd从监听红黑树摘下——EPOLLIN——epoll_ctl——EPOLL_CTL_ADD重新放到树上监听读事件——epoll_wait监听
+socket,bind,listen——epoll_create创建监听红黑树——返回epfd——epoll_ctl向树上添加一个监听fd——while(1)——epoll_wait监听——对应监听fd事件发生——返回监听满足数组——判断返回数组元素——lfd满足——Accept——cfd满足——read——数据操作——
+
+**（从此区别）**——cfd从树上摘下——EPOLLOUT——回调函数——epoll_ctl()——EPOLL_CTL_ADD重新放到树上监听写事件——等待epoll_wait返回——说明cfd可写——write回去——cfd从监听红黑树摘下——EPOLLIN——epoll_ctl——EPOLL_CTL_ADD重新放到树上监听读事件——epoll_wait监听
