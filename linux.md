@@ -3658,10 +3658,41 @@ struct evt{
 
 原来流程：
 
-socket,bind,listen——epoll_create创建监听红黑树——返回epfd——epoll_ctl向树上添加一个监听fd——while(1)——epoll_wait监听——对应监听fd事件发生——返回监听满足数组——判断返回数组元素——lfd满足——Accept——cfd满足——read——数据操作——write
+socket,bind,listen——epoll_create创建监听红黑树——返回epfd——epoll_ctl向树上添加一个监听fd——while(1)
+
+——epoll_wait监听——对应监听fd事件发生——返回监听满足数组——判断返回数组元素——lfd满足——Accept——cfd满足——read——数据操作——write
+
+
 
 epoll反应堆：**不但监听cfd的读事件，还要监听写事件**
 
-socket,bind,listen——epoll_create创建监听红黑树——返回epfd——epoll_ctl向树上添加一个监听fd——while(1)——epoll_wait监听——对应监听fd事件发生——返回监听满足数组——判断返回数组元素——lfd满足——Accept——cfd满足——read——数据操作——
+socket,bind,listen——epoll_create创建监听红黑树——返回epfd——epoll_ctl向树上添加一个监听fd——while(1)——**（从此区别）**epoll_wait监听
 
-**（从此区别）**——cfd从树上摘下——EPOLLOUT——回调函数——epoll_ctl()——EPOLL_CTL_ADD重新放到树上监听写事件——等待epoll_wait返回——说明cfd可写——write回去——cfd从监听红黑树摘下——EPOLLIN——epoll_ctl——EPOLL_CTL_ADD重新放到树上监听读事件——epoll_wait监听
+——对应监听fd事件发生——返回监听满足数组——判断返回数组元素——lfd满足——Accept——cfd满足——read——数据操作——cfd从树上摘下
+
+——EPOLLOUT——回调函数——epoll_ctl()——EPOLL_CTL_ADD重新放到树上监听写事件——等待epoll_wait返回——说明cfd可写——write回去
+
+——cfd从监听红黑树摘下——EPOLLIN——epoll_ctl——EPOLL_CTL_ADD重新放到树上监听读事件——epoll_wait监听
+
+
+
+eventset：设置回调
+
+​					lfd->acceptconn();		cfd->recvdata();		cfd->senddata();
+
+eventadd函数：将一个fd添加到监听红黑树，设置监听read事件还是write事件
+
+原来是直接操作event结构体操作fd的，现在是通过event结构体中的void*ptr指向的另一个定义了回调函数的结构体来操作fd
+
+网络编程中：read——recv()		write——send()
+
+### 线程池
+
+由于创建与销毁线程开销较大，因此可以提前生成较多线程以供使用
+
+1. 预先创建阻塞于accept多线程，使用互斥锁上锁保护accept
+2. 预先创建多线程，由主线程调用accept
+
+线程完成任务后，回到线程池继续等待下次调用。线程数量根据占用情况动态调制
+
+![线程池](..\note\图\线程池.jpg)
