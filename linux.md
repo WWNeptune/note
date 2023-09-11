@@ -4203,3 +4203,80 @@ int main(void)
 
 ​							跳转至 wait阻塞线程会被 假信号 唤醒。判断： wait_exit_thr_num  > 0 pthread_exit(); 
 
+### web服务器
+
+##### HTTP请求方法
+
+| **GET**     | 请求指定的页面信息，并返回实体主体。                         |
+| ----------- | ------------------------------------------------------------ |
+| **POST**    | 向指定资源提交数据进行处理请求（例如提交表单或者上传文件）。数据被包含在请求体中。POST请求可能会导致新的资源的建立和/或已有资源的修改 |
+| **HEAD**    | 类似于get请求，只不过返回的响应中没有具体的内容，用于获取报头 |
+| **PUT**     | 从客户端向服务器传送的数据取代指定的文档的内容               |
+| **DELETE**  | 请求服务器删除指定的页面。                                   |
+| **CONNECT** | HTTP/1.1协议中预留给能够将连接改为管道方式的代理服务器       |
+| **OPTIONS** | 允许客户端查看服务器的性能                                   |
+| **TRACE**   | 回显服务器收到的请求，主要用于测试或诊断                     |
+
+#### http协议
+
+通常HTTP消息包括客户机向服务器的请求消息和服务器向客户机的响应消息
+
+##### 请求消息(Request) 
+
+浏览器 —> 发给 —> 服务器。主旨内容包含4部分：
+
+l **请求行**: 说明请求类型, 要访问的资源, 以及使用的http版本
+
+l **请求头**: 说明服务器要使用的附加信息
+
+l **空**  **行**: 必须！, 即使没有请求数据
+
+l **请求数据**: 也叫主体, 可以添加任意的其他数据
+
+```http
+1. GET  /hello.c  HTTP/1.1 
+2. Host: localhost:2222
+3. User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:24.0) Gecko/201001    01 Firefox/24.0
+4. Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+5. Accept-Language: zh-cn,zh;q=0.8,en-us;q=0.5,en;q=0.3
+6. Accept-Encoding: gzip, deflate
+7. Connection: keep-alive
+8. If-Modified-Since: Fri, 18 Jul 2014 08:36:36 GMT
+9. 
+```
+
+以上是浏览器发送给服务器的http**协议头**内容举例, 注意：9行的空行(\r\n)也是协议头的一部分
+
+##### 响应消息(Response)
+
+服务器 —> 发给 —> 浏览器。主旨内容包含4部分：
+
+l **状态行:** 包括http协议版本号, 状态码, 状态信息
+
+l **消息报头:** 说明客户端要使用的一些附加信息
+
+l **空**  **行:** 必须!
+
+l **响应正文:** 服务器返回给客户端的文本信息
+
+```http
+1. HTTP/1.1  200  Ok
+2. Server: xhttpd
+3. Date: Fri, 18 Jul 2014 14:34:26 GMT
+4. Content-Type: text/plain; charset=iso-8859-1 (必选项)
+5. Content-Length: 32  （ 要么不写 或者 传-1， 要写务必精确 ！ ）
+6. Content-Language: zh-CN
+7. Last-Modified: Fri, 18 Jul 2014 08:36:36 GMT
+8. Connection: close 
+9. 
+10. #include <stdio.h>
+11. 
+12. int main(void)
+13. {	
+14. 	printf(“ Welcome to itcast ...  \n");
+15. 
+16. 	return 0;
+17. }
+```
+
+以上是经服务器按照http协议，写回给浏览器的内容举例，1~9行是**协议头**部分。注意：9行\r\n的空行不可忽略
