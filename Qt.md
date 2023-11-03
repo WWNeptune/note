@@ -73,9 +73,9 @@ connect(mybtn,&Mybutton::clicked,this,&Widget::close);//(指针，函数地址�
 emit this->zt->hungry();
 ```
 
-#### 信号与槽重载
+#### 信号与槽函数重载
 
-如果信号与槽发生重载，则先创建指针，指定传参再连接，避免二义性
+如果信号与槽函数发生重载，则先创建函数指针，指定传参再连接，避免二义性（参数不明确）
 
 以下是重载的例子，hungry和treat传入参数为QString	```void treat(QString name);	void hungry(QString name);```
 
@@ -196,3 +196,6 @@ connect(btn3,&QPushbutton::clicked,[=](){this->st->treat("文本")});
 //原先clicked不能连接string为参的treat函数（clicked内默认bool类型参数），通过这种方式可以间接连接
 ```
 
+### QMainWindow
+
+主窗口类，包含一个菜单栏，多个工具栏，锚接部件，状态栏，中心部件
