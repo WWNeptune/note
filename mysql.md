@@ -720,7 +720,7 @@ Memory 引擎的表数据是**存储在内存**中的，受硬件问题、断电
 特点：
 
 - 存放在内存中，速度快
-- hash索引（默认）
+- 可使用hash索引（默认）
 
 文件：
 
@@ -803,6 +803,18 @@ EXPLAIN 各字段含义：
 
 #### 索引
 
+```sql
+#创建索引：
+CREATE [ UNIQUE | FULLTEXT ] INDEX index_name ON table_name (index_col_name, ...);
+#如果不加 CREATE 后面不加索引类型参数，则创建的是常规索引
+#查看索引：
+SHOW INDEX FROM table_name;
+#删除索引：
+DROP INDEX index_name ON table_name;
+```
+
+
+
 优点：
 
 - 提高数据检索效率，降低数据库的IO成本
@@ -847,9 +859,22 @@ EXPLAIN 各字段含义：
 
 尽量使用覆盖索引（查询使用了索引，并且需要返回的列，在该索引中已经全部能找到），减少 select *。
 
+当普通索引找不到我们要的完整信息，迫不得已要执行回表查询，再回到主键索引或者聚集索引中查询数据
+
 ##### 前缀索引
 
 当字段类型为字符串（varchar, text等）时，有时候需要索引很长的字符串，这会让索引变得很大，查询时，浪费大量的磁盘IO，影响查询效率，此时可以只降字符串的一部分前缀，建立索引，这样可以大大节约索引空间，从而提高索引效率。
+
+##### 规定使用索引
+
+使用索引use index：
+`explain select * from tb_user use index(idx_user_pro) where profession="软件工程";`
+不使用哪个索引ignore index：
+`explain select * from tb_user ignore index(idx_user_pro) where profession="软件工程";`
+必须使用哪个索引force index：
+`explain select * from tb_user force index(idx_user_pro) where profession="软件工程";`
+
+use 是建议，实际使用哪个索引 MySQL 还会自己权衡运行速度去更改，force就是无论如何都强制使用该索引
 
 ##### 设计原则
 
@@ -861,5 +886,121 @@ EXPLAIN 各字段含义：
 6. 要控制索引的数量，索引并不是多多益善，索引越多，维护索引结构的代价就越大，会影响增删改的效率
 7. 如果索引列不能存储NULL值，请在创建表时使用NOT NULL约束它。当优化器知道每列是否包含NULL值时，它可以更好地确定哪个索引最有效地用于查询
 
-### SQL优化
+#### SQL优化
 
+##### 插入数据
+
+普通插入：
+
+1. 采用批量插入（一次插入的数据不建议超过1000条）
+2. 手动提交事务
+3. 主键顺序插入
+
+大批量插入：
+如果一次性需要插入大批量数据，使用insert语句插入性能较低，此时可以使用MySQL数据库提供的load指令插入
+
+##### 主键优化
+
+主键设计原则：
+
+- 满足业务需求的情况下，尽量降低主键的长度
+- 插入数据时，尽量选择顺序插入，选择使用 AUTO_INCREMENT 自增主键
+- 尽量不要使用 UUID 做主键或者是其他的自然主键，如身份证号
+- 业务操作时，避免对主键的修改
+
+数据组织方式：在InnoDB存储引擎中，表数据都是**根据主键顺序组织存放**的，这种存储方式的表称为索引组织表（Index organized table, IOT）
+
+页分裂：页可以为空，也可以填充一半，也可以填充100%，每个页包含了2-N行数据（如果一行数据过大，会行溢出），根据主键排列。
+页合并：当删除一行记录时，实际上记录并没有被物理删除，只是记录被标记（flaged）为删除并且它的空间变得允许被其他记录声明使用。当页中删除的记录到达 MERGE_THRESHOLD（默认为页的50%），InnoDB会开始寻找最靠近的页（前后）看看是否可以将这两个页合并以优化空间使用。
+
+MERGE_THRESHOLD：合并页的阈值，可以自己设置，在创建表或创建索引时指定
+
+##### order by优化
+
+1. Using filesort：通过表的索引或全表扫描，读取满足条件的数据行，然后在排序缓冲区 sort buffer 中完成排序操作，所有不是通过索引直接返回排序结果的排序都叫 FileSort 排序
+2. Using index：通过有序索引顺序扫描直接返回有序数据，这种情况即为 using index，不需要额外排序，操作效率高
+
+尽量优化为index
+
+如果order by字段全部使用升序排序或者降序排序，则都会走索引，但是如果一个字段升序排序，另一个字段降序排序（假设索引都是升序），则不会走索引
+
+- 根据排序字段建立合适的索引，多字段排序时，也遵循**最左前缀法则**
+- 尽量使用覆盖索引
+- 多字段排序，一个升序一个降序，此时需要注意联合索引在创建时的规则（ASC/DESC）
+- 如果不可避免出现filesort，大数据量排序时，可以适当增大排序缓冲区大小 sort_buffer_size（默认256k）
+
+##### group by优化
+
+- 在分组操作时，可以通过索引来提高效率
+- 分组操作时，索引的使用也是满足最左前缀法则的
+
+##### limit优化
+
+常见的问题如`limit 2000000, 10`，此时需要 MySQL 排序前2000000条记录，但仅仅返回2000000 - 2000010的记录，其他记录丢弃，越往后性能越差，查询排序的代价非常大。
+优化方案：一般大数据量分页查询时，通过创建覆盖索引能够比较好地提高性能，可以通过覆盖索引加子查询形式进行优化
+
+```sql
+-- 此语句耗时很长
+select * from tb_sku limit 9000000, 10;
+-- 通过覆盖索引加快速度，直接通过主键索引进行排序及查询
+select id from tb_sku order by id limit 9000000, 10;
+-- 通过连表查询即可实现第一句的效果，并且能达到第二句的速度
+select s.* from tb_sku as s, (select id from tb_sku order by id limit 9000000, 10) as a where s.id = a.id;
+-- 下面的语句是错误的，因为 MySQL 不支持 in 里面使用 limit
+select * from tb_sku where id in (select id from tb_sku order by id limit 9000000, 10);
+```
+
+##### count优化
+
+MyISAM 引擎把一个表的总行数存在了磁盘上，因此执行 count(*) 的时候会直接返回这个数，效率很高（前提是不适用where）；
+InnoDB 在执行 count(*) 时，需要把数据一行一行地从引擎里面读出来，然后累计计数。
+优化方案：自己计数，如创建key-value表存储在内存或硬盘，或者是用redis
+
+各种用法的性能：
+
+- count(主键)：InnoDB引擎会遍历整张表，把每行的主键id值都取出来，返回给服务层，服务层拿到主键后，直接按行进行累加（主键不可能为空）
+- count(字段)：没有not null约束的话，InnoDB引擎会遍历整张表把每一行的字段值都取出来，返回给服务层，服务层判断是否为null，不为null，计数累加；有not null约束的话，InnoDB引擎会遍历整张表把每一行的字段值都取出来，返回给服务层，直接按行进行累加（额外需要判断null）
+- count(1)：InnoDB 引擎遍历整张表，但不取值。服务层对于返回的每一层，放一个数字 1 进去，直接按行进行累加
+- count(*)：InnoDB 引擎并不会把全部字段取出来，而是专门做了优化，不取值，服务层直接按行进行累加
+
+按效率排序：count(字段) < count(主键) < count(1) < count(*)，所以尽量使用 count(*)
+
+##### update优化
+
+InnoDB 的行锁是针对**索引**加的锁，不是针对记录加的锁，并且该索引不能失效，否则会从行锁升级为表锁。
+
+如以下两条语句：
+`update student set no = '123' where id = 1;`，这句由于id有主键索引，所以只会锁这一行；
+`update student set no = '123' where name = 'test';`，这句由于name没有索引，所以会把整张表都锁住进行数据更新，解决方法是给name字段添加索引
+
+#### 视图
+
+只保存SQL逻辑，不保存实际数据
+
+```sql
+create [or replace] view 视图名 as 查询语句 [with cascaded check option]
+# 查询创建视图语句
+show create view 视图名
+#查询视图
+select * from 视图名
+```
+
+##### 检查选项
+
+创建视图时添加```with cascaded check option```，视图会检查更改的内容是否符合视图定义
+
+检查选项有cascaded和local，当视图是在其他视图上创建时，cascaded只会检查当前视图约束，而local会递归检查依赖的视图的约束。但如果依赖的视图没有设置检查选项则不会影响
+
+##### 视图更新
+
+视图更新要求视图的行与基础表一对一，否则不会更新，包含以下选项时不可更新
+
+- 聚合函数或窗口函数
+- DISTINCT
+- GROUP BY
+- HAVING
+- UNION或UNION ALL
+
+#### 存储过程
+
+对SQL语句的代码封装和重用
