@@ -1003,4 +1003,187 @@ select * from 视图名
 
 #### 存储过程
 
-对SQL语句的代码封装和重用
+对SQL语句的代码封装和重用，有点类似函数定义
+
+```sql
+create procedure 过程名()
+begin
+	sql语句;
+end;
+#执行存储过程
+call 过程名()
+#展示存储过程定义
+show create procedure 过程名()
+#删除存储过程
+drop [if exists] procedure 过程名()
+#查看指定数据库的存储过程
+select * from INFORMATION_SCHEMA.ROUTINES where ROUTINE_SCHEMA='xxx'
+```
+
+如果在命令行内定义，会因为sql语句内的分号提前结束，可通过自定义结束符号```delimiter $$```更改执行结束符号。使用结束后再改回分号```delimiter ;```
+
+##### 定义变量
+
+declare 变量名 变量类型
+
+```sql
+DECLARE a INT default 50;
+DECLARE b varchar(10);
+```
+
+##### if语法
+
+```sql
+IF 条件1 THEN
+......
+ELSEIF 条件2 THEN#可选
+......
+ELSE#可选
+......
+END IF;
+```
+
+##### 存储函数
+
+有返回值的存储过程，参数只能为IN类型
+
+#### 触发器
+
+在insert/update/delete前或后，触发并执行定义的sql语句。使用OLD或NEW来引用变化前后的记录内容。目前触发器只支持行级触发，不支持语句级触发
+
+语句级：执行一行sql触发一次，与sql影响的数据量无关
+
+行级：每影响一个行触发一次
+
+```sql
+CREATE TRIGGER trigger_name
+BEFORE/AFTER INSERT/UPDATE/DELETE
+ON 表名 FOR EACH ROW
+BEGIN
+	sql语句;
+END
+#查看触发器
+show TRIGGERS
+#删除
+drop TRIGGER [表名].触发器名
+```
+
+insert只有new可用，delete只有old可用
+
+#### InnoDB
+
+##### 逻辑存储结构
+
+![InnoDB](.\图\InnoDB.jpg)
+
+表空间(ibd文件)：一个mysql实例可以对应多个表空间，用于存储记录，索引等数据
+
+段：分为数据段，索引段，回滚段
+
+InnoDB是索引组织表，数据段就是B+树的叶子结点，索引段就是B+树的非叶子结点，段用来管理多个区
+
+区：表空间的单元结构，默认区大小1M。InnoDB默认页大小16K，即默认区有64页
+
+页：InnoDB磁盘管理的最小单元。为了保证页连续，InnoDB每次从磁盘申请4-5个区
+
+行：即存储的数据
+
+Trx_id：每次对某条记录改动时，都会把对应事务id赋值给trx_id
+
+Roll_pointer：每次修改时会把旧版本写到undo日志，该列则指向修改前的信息
+
+##### 内存架构
+
+###### Buffer Poll
+
+缓冲池，执行操作时先修改缓冲池数据，若没有则先从磁盘加载，修改后再刷新到磁盘，减少磁盘IO
+
+缓冲池以页为单位，包含free page（未使用），clean page（使用，数据未变动），dirty page（使用，数据已变动且与磁盘不一致）
+
+###### Change Buffer
+
+更改缓冲区（针对非唯一二级索引页），在执行DML语句时如果数据不在Buffer Poll，不会直接操作磁盘，而是先把变更存在Change Buffer。未来数据被读取时再将数据合并恢复到Buffer Poll，再将合并后数据写入磁盘
+
+意义：由于二级索引通常非唯一，且一般插入随机，并且删除和更新会影响索引数中不相邻的二级索引页。如果每次都操作磁盘会造成大量的磁盘IO。
+
+###### Adaptive Hash Index
+
+自适应哈希索引，用于优化对buffer poll的查询
+
+###### Log buffer
+
+日志缓冲区，保存要写入磁盘的log日志，默认大小16M
+
+##### 磁盘结构
+
+###### system tablespace
+
+系统表空间，更改缓冲区的存储区域
+
+###### file-per-table tablespaces
+
+每个表的文件表空间，包含单个InnoDB表的数据和索引，并存储在单个数据文件
+
+###### general tablespaces
+
+通用表空间，需要手动创建。创建表时可以手动指定使用该表空间
+
+###### Undo tablespaces
+
+撤销表空间，存储undo log日志
+
+###### temporary tablespaces
+
+临时表空间
+
+###### doublewrite buffer files
+
+双写缓冲区，InnoDB在将数据读入buffer pool前先写入该处，便于异常恢复
+
+###### redo log
+
+重做日志，保证事务持久性。当事务提交后会把所有修改信息存于该日志，用于刷新脏页到磁盘发生错误时进行数据恢复
+
+有重做日志缓冲和重做日志文件两部分，分别在内存和磁盘
+
+##### 事务
+
+原子性，一致性，永久性由redo log和undo log保证；隔离性由锁和mvcc保证
+
+###### redo log
+
+分为重做日志缓冲和重做日志文件
+
+事务提交时除了在buffer pool中写入数据，还会在redolog buffer写入一份，而redolog会将其写入磁盘的日志文件。当事务完成提交后，在脏页写入磁盘发生错误时可从redolog日志恢复。
+
+由于redolog日志是一整个文件，对其为顺序写入，比从buffer pool**立即**写入磁盘随机位置性能要高。若buffer pool成功写入则该文件失效并定时清理
+
+若redolog写入失败则事务也会失败
+
+###### undo log
+
+回滚日志，记录之前被修改的信息
+
+不同的是undo log是逻辑日志，记录的是操作
+
+##### MVCC多版本并发控制
+
+- 当前读
+
+读取记录的最新版本。读取时保证其他事务不能修改当前记录，会对读取记录加锁
+
+- 快照读
+
+读取时不加锁就是快照读，读取的是可见版本，可能是历史数据
+
+Read Committed：每次select生成一个快照读
+
+Repeatable Read：开启事务第一个select才是快照读
+
+Serializable：快照读退化为当前读
+
+- MVCC
+
+维护一个数据的多个版本，使读写操作没有冲突，依赖三个隐式字段，undo log，readview
+
+三个隐藏字段  DB_TRX_ID最近修改事务ID  DB_ROLL_PTR回滚指针   DB_ROW_ID隐藏主键
