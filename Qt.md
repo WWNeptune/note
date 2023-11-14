@@ -199,3 +199,23 @@ connect(btn3,&QPushbutton::clicked,[=](){this->st->treat("文本")});
 ### QMainWindow
 
 主窗口类，包含一个菜单栏，多个工具栏，锚接部件，状态栏，中心部件
+
+```c++
+QMenuBar *bar= menuBar();//新建菜单栏
+this->setMenuBar(bar);//设置到当前菜单
+QMenu* menu1= bar->addMenu("Menu");//添加菜单选项
+QAction *act1=menu1->addAction("act1");//为菜单选项添加子菜单选项
+menu1->addSeparator();//分割线
+/*新建一个子菜单并挂到某个菜单项下*/
+QMenu * subMenu=new QMenu;
+subMenu->addAction("Menu1");
+subMenu->addAction("Menu2");
+act1->setMenu(subMenu);
+/*添加工具栏*/
+QToolBar * toolbar=new QToolBar(this);
+addToolBar(Qt::LeftToolBarArea, toolbar);
+toolbar->setAllowedAreas(Qt::LeftToolBarArea|Qt::RightToolBarArea);
+toolbar->setFloatable(false);//设置允许浮动
+toolbar->addAction(act1);//添加子菜单项
+```
+
